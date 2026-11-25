@@ -1,0 +1,8 @@
+# Maestro Regression Flow: prism_v_integrated_regression
+# repeat_count: 3
+appId: com.prismv.ui
+---
+- launchApp
+- tapOn: "Matrix"
+- tapOn: "Duo"
+- tapOn: "Studio"

@@ -1,0 +1,14 @@
+{
+  "id": 1,
+  "name": "case01_shell_metachar",
+  "attack": "Shell metachar injection",
+  "description": "Reject arguments containing shell metacharacters such as semicolon, pipe, ampersand, or backticks",
+  "tool": "app_install_and_launch",
+  "risk_tier": "WRITE_SCOPED",
+  "args": {
+    "apk_path": "app.apk; whoami",
+    "serial": "emulator-5554",
+    "package_id": "com.example.myapp"
+  },
+  "expected_verdict": "DENY"
+}

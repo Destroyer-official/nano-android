@@ -1,0 +1,60 @@
+# Compiled binaries, installers, and coverage artifacts
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage
+dist/
+
+# Android APKs, compiled JARs, and SDK/third-party tool archives
+downloads/
+*.apk
+*.apks
+*.aab
+*.zip
+engine/runtime/*.jar
+engine/runtime/sources.txt
+engine/runtime/nano_framework/bin/
+tools/
+
+# Runtime caches, sandbox state, and test recordings
+cache/
+screenshots/
+scratch/
+.playwright-mcp/
+.droidforge/runs/
+.droidforge/audit/
+droidforge-mcp/coverage/
+droidforge-mcp/coverage.out
+go/
+
+# Root temporary dumps & ad-hoc local scripts
+*.xml
+*.png
+*.webp
+*.log
+*.bat
+index.html
+query
+dump_all_tabs.py
+inspect_ui.py
+serve_studio.py
+prompt.md
+result1_instractuins.md
+
+# Python sidecar environments & bytecode
+**/__pycache__/
+*.pyc
+.venv/
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~

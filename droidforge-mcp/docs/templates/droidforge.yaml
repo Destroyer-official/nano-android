@@ -1,0 +1,58 @@
+# DroidForge Project Manifest
+# Defines test boundaries, execution resource caps, observation modes, and workload profiles.
+schema_version: 1
+
+project:
+  name: "family-scam-shield"
+  mode: "source" # "source" | "apk-only"
+  gradle_root: "."
+  default_variant: "debug"
+  allowlisted_packages:
+    - "com.example.scamshield.debug"
+    - "com.example.scamshield.debug.test"
+
+execution:
+  prefer_tier0_jvm: true # Agent must run Robolectric/Compose before booting AVD
+  default_avd: "api37_clean"
+  golden_snapshot: "clean_base"
+  avd_ram_mb: 3072 # Safe ceiling for 16 GB host machines
+  avd_idle_suspend_min: 10 # Auto-close emulator when idle to free host RAM
+  gradle_max_heap_mb: 3072
+  max_steps_per_task: 15 # Circuit breaker against runaway LLM loops
+  max_identical_ui_hashes: 3 # Halt immediately with STUCK_STATE if no progress
+  sequential_avd_mode: true
+
+observation:
+  default_mode: "pruned_tree_diff" # "pruned_tree_diff" | "hybrid_som"
+  attach_screenshot_on:
+    - "empty_or_sparse_tree" # Less than 3 interactive nodes (Canvas/WebView/Video)
+    - "crash_or_anr"
+    - "explicit_request"
+  screenshot_max_height: 720
+  screenshot_format: "webp"
+  screenshot_quality: 75
+  settle_timeout_ms: 1500
+  redact_status_bar_on_physical: true
+
+workloads:
+  # Select profile: "standard" | "scam-shield" | "video-codec"
+  profile: "scam-shield"
+  mock_server_port: 8080 # Bound via `adb reverse tcp:8080 tcp:8080`
+
+  # Configuration profile for Family Scam Shield workload
+  scam_shield:
+    check_android17_otp_delay: true
+    play_policy_justification: "./docs/templates/play-policy-justification.yaml"
+    forbidden_undeclared_permissions:
+      - "android.permission.READ_CALL_LOG"
+      - "android.permission.BIND_ACCESSIBILITY_SERVICE"
+
+  # Configuration profile for Next-Gen Video Compression workload
+  video_codec:
+    fixtures_manifest: "./.droidforge/fixtures.lock.json"
+    device_fixture_dir: "/sdcard/Download/droidforge_fixtures"
+    oracle_mode: "bit_exact" # "bit_exact" | "quality_bounded"
+    vmaf_min: 92.0
+    ssim_min: 0.97
+    max_start_skin_temp_c: 34.0
+    enforce_16kb_elf_alignment: true

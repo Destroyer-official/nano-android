@@ -1,0 +1,14 @@
+{
+  "id": 8,
+  "name": "case08_contacts_sms_read",
+  "attack": "Contacts/SMS read attempt",
+  "description": "Reject reading sensitive contacts or telephony providers when disallowed by policy",
+  "tool": "app_state_inspect",
+  "risk_tier": "READ",
+  "args": {
+    "query": "content://contacts/phones",
+    "package_id": "com.android.providers.contacts",
+    "serial": "emulator-5554"
+  },
+  "expected_verdict": "DENY"
+}

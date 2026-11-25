@@ -1,0 +1,27 @@
+schema_version: 1
+app_package: "com.example.scamshield"
+target_sdk: 37
+
+# Explicit justification declarations for sensitive/restricted Android permissions.
+# Scanned by apk_audit_compliance before build or release.
+restricted_permissions:
+  - permission: "android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
+    approved_role: "user_opt_in_scam_alerting"
+    in_app_disclosure_screen_test: ".droidforge/flows/disclosure_notification_access.yaml"
+    android17_otp_fallback: true
+    notes: "Primary real-time scam URL detection path; avoids READ_SMS 3-hour OTP delay on API 37."
+
+  - permission: "android.permission.READ_SMS"
+    status: "PROHIBITED_UNLESS_DEFAULT_SMS_ROLE"
+    fail_ci_if_present: true
+    notes: "Prohibited by Google Play policy for non-default SMS handlers."
+
+  - permission: "android.permission.READ_CALL_LOG"
+    status: "PROHIBITED"
+    fail_ci_if_present: true
+    notes: "Prohibited; call log access not required for phishing SMS protection."
+
+  - permission: "android.permission.BIND_ACCESSIBILITY_SERVICE"
+    status: "PROHIBITED"
+    fail_ci_if_present: true
+    notes: "Strictly prohibited to ensure compliance with Play Protect malware policies."

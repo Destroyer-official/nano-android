@@ -1,0 +1,8 @@
+# Maestro Regression Flow: antigravity_e2e_verified_flow
+# repeat_count: 3
+appId: com.prismv.ui
+---
+- launchApp
+- tapOn: "Matrix"
+- tapOn: "Duo"
+- tapOn: "Compress Video"

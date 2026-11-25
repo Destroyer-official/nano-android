@@ -1,0 +1,9 @@
+# Maestro Regression Flow: simple_calendar_schedule_regression_flow
+# repeat_count: 3
+appId: com.simplemobiletools.calendar.pro
+---
+- launchApp:
+    clearState: true
+- tapOn: "Month View"
+- tapOn: "Week View"
+- tapOn: "Add Event"

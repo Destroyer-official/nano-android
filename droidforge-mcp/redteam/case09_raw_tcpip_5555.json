@@ -1,0 +1,14 @@
+{
+  "id": 9,
+  "name": "case09_raw_tcpip_5555",
+  "attack": "Raw tcpip 5555 attempt",
+  "description": "Reject opening unencrypted adb tcpip 5555 port",
+  "tool": "device_reset_state",
+  "risk_tier": "WRITE_SCOPED",
+  "args": {
+    "command": "adb tcpip 5555",
+    "port": 5555,
+    "serial": "emulator-5554"
+  },
+  "expected_verdict": "DENY"
+}

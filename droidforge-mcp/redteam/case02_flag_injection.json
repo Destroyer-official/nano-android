@@ -1,0 +1,13 @@
+{
+  "id": 2,
+  "name": "case02_flag_injection",
+  "attack": "Flag injection",
+  "description": "Reject package ID containing spaces or CLI flags violating package ID regex",
+  "tool": "device_reset_state",
+  "risk_tier": "WRITE_SCOPED",
+  "args": {
+    "package_id": "--user 0 com.android.settings",
+    "serial": "emulator-5554"
+  },
+  "expected_verdict": "DENY"
+}

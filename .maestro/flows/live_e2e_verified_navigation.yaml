@@ -1,0 +1,13 @@
+# Maestro Regression Flow: live_e2e_verified_navigation
+# repeat_count: 3
+appId: com.prismv.ui
+---
+- launchApp
+- tapOn: "Duo"
+- assertVisible: "DUO COMPARISON DECK"
+- launchApp:
+    clearState: true
+- tapOn: "Duo"
+- assertVisible: "DUO COMPARISON DECK"
+- tapOn: "Matrix"
+- assertVisible: "Diagnostics"

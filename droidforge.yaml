@@ -1,0 +1,36 @@
+schema_version: 1
+project:
+  name: "prism-v"
+  mode: "source"                     # "source" | "apk-only"
+  gradle_root: "."
+  default_variant: "debug"
+  allowlisted_packages:
+    - "com.prism.v"
+    - "com.prism.v.debug"
+    - "com.example.app.debug"
+
+execution:
+  prefer_tier0_jvm: true             # Agent must run Robolectric/Compose before booting AVD
+  default_avd: "api37_clean"
+  golden_snapshot: "clean_base"
+  avd_ram_mb: 3072                   # Safe ceiling for 16 GB host machines
+  avd_idle_suspend_min: 10           # Auto-close emulator when idle to free host RAM
+  gradle_max_heap_mb: 3072
+  max_steps_per_task: 15             # Circuit breaker against runaway LLM loops
+  max_identical_ui_hashes: 3         # Halt immediately with STUCK_STATE if no progress
+  sequential_avd_mode: true
+
+observation:
+  default_mode: "pruned_tree_diff"   # "pruned_tree_diff" | "hybrid_som"
+  attach_screenshot_on:
+    - "empty_or_sparse_tree"         # Less than 3 interactive nodes (Canvas/WebView/Video)
+    - "crash_or_anr"
+    - "explicit_request"
+  screenshot_max_height: 720
+  screenshot_format: "webp"
+  screenshot_quality: 75
+  settle_timeout_ms: 1500
+
+workloads:
+  profile: "standard"                # "standard" | "scam-shield" | "video-codec"
+  mock_server_port: 8080             # Bound via adb reverse tcp:8080 tcp:8080

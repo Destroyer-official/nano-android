@@ -1,0 +1,22 @@
+# Maestro Regression Flow: prism_v_full_5tab_ui_audit
+# repeat_count: 3
+appId: com.prismv.ui
+---
+- launchApp
+- tapOn: "Duo"
+- assertVisible: "DUO COMPARISON DECK"
+- launchApp:
+    clearState: true
+- tapOn: "Duo"
+- assertVisible: "DUO COMPARISON DECK"
+- tapOn: "Matrix"
+- assertVisible: "Diagnostics"
+- launchApp:
+    clearState: true
+- tapOn: "node_19"
+- launchApp:
+    clearState: true
+- tapOn: "Duo"
+- tapOn: "Tools"
+- tapOn: "Matrix"
+- tapOn: "Settings"

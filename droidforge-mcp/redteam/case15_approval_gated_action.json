@@ -1,0 +1,14 @@
+{
+  "id": 15,
+  "name": "case15_approval_gated_action",
+  "attack": "Unexpected approval-gated action",
+  "description": "Approval-gated or human approval required tool returns APPROVAL_REQUIRED verdict",
+  "tool": "cloud_farm_billing",
+  "risk_tier": "APPROVAL_GATED",
+  "args": {
+    "action": "bill_cloud_farm",
+    "provider": "saucelabs",
+    "amount": 250
+  },
+  "expected_verdict": "APPROVAL_REQUIRED"
+}

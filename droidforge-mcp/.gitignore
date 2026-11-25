@@ -1,0 +1,33 @@
+# Binaries and executables
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+
+# Test outputs and run artifacts
+.droidforge/runs/
+.droidforge/audit/
+*.webp
+*.png
+*.log
+
+# IDE and OS files
+.idea/
+.vscode/
+.cursor/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Go build cache
+dist/
+
+# Python sidecar venv & caches
+sidecar-python/.venv/
+sidecar-python/__pycache__/
+sidecar-python/*.egg-info/
+*.pyc

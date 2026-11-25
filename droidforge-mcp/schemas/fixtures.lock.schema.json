@@ -1,0 +1,84 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://droidforge.dev/schemas/fixtures.lock.schema.json",
+  "title": "DroidForge Fixtures Lock Schema",
+  "description": "Validation schema for fixtures.lock.json media asset registry.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "fixtures"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "fixtures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "sha256",
+          "size_bytes",
+          "relative_path"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for the fixture asset."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable label for the fixture."
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[a-fA-F0-9]{64}$",
+            "description": "Deterministic SHA-256 hash of the fixture file."
+          },
+          "size_bytes": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Size in bytes."
+          },
+          "relative_path": {
+            "type": "string",
+            "description": "Relative path from repository or cache root."
+          },
+          "mime_type": {
+            "type": "string",
+            "description": "MIME content type (e.g. video/mp4, image/png)."
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Optional media parameters for codec verification.",
+            "properties": {
+              "duration_s": {
+                "type": "number",
+                "minimum": 0
+              },
+              "resolution": {
+                "type": "string"
+              },
+              "fps": {
+                "type": "number",
+                "minimum": 0
+              },
+              "codec": {
+                "type": "string"
+              },
+              "color_space": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": true
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

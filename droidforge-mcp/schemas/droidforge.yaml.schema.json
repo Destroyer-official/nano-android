@@ -1,0 +1,242 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://droidforge.dev/schemas/droidforge.yaml.schema.json",
+  "title": "DroidForge Project Manifest Schema",
+  "description": "Validation schema for droidforge.yaml project configuration file.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "project",
+    "execution",
+    "observation",
+    "workloads"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Schema version number."
+    },
+    "project": {
+      "type": "object",
+      "description": "Target application parameters and boundaries.",
+      "required": [
+        "name",
+        "mode",
+        "allowlisted_packages"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Project identifier name."
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "source",
+            "apk-only"
+          ],
+          "description": "Build mode: source or source-free APK."
+        },
+        "gradle_root": {
+          "type": "string",
+          "default": ".",
+          "description": "Path to the root Gradle directory."
+        },
+        "default_variant": {
+          "type": "string",
+          "default": "debug",
+          "description": "Default build variant (e.g., debug)."
+        },
+        "allowlisted_packages": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-zA-Z][a-zA-Z0-9_]*(\\.[a-zA-Z][a-zA-Z0-9_]*)+$"
+          },
+          "minItems": 1,
+          "description": "Packages the AI is allowed to install, clear, and mutate."
+        }
+      },
+      "additionalProperties": false
+    },
+    "execution": {
+      "type": "object",
+      "description": "Execution settings and resource caps.",
+      "properties": {
+        "prefer_tier0_jvm": {
+          "type": "boolean",
+          "description": "Require running JVM tests before booting emulators."
+        },
+        "default_avd": {
+          "type": "string",
+          "description": "Target AVD name."
+        },
+        "golden_snapshot": {
+          "type": "string",
+          "description": "Snapshot name to restore for deterministic state."
+        },
+        "avd_ram_mb": {
+          "type": "integer",
+          "minimum": 1024,
+          "description": "Memory ceiling for emulator in MB."
+        },
+        "avd_idle_suspend_min": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Inactivity minutes before auto-suspending AVD."
+        },
+        "gradle_max_heap_mb": {
+          "type": "integer",
+          "minimum": 1024,
+          "description": "Max heap size for Gradle daemon in MB."
+        },
+        "max_steps_per_task": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Max LLM exploration steps before circuit breaker halt."
+        },
+        "max_identical_ui_hashes": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Consecutive identical UI states allowed before STUCK_STATE alert."
+        },
+        "sequential_avd_mode": {
+          "type": "boolean",
+          "description": "Run emulators sequentially to cap host RAM."
+        }
+      },
+      "additionalProperties": false
+    },
+    "observation": {
+      "type": "object",
+      "description": "Perception settings for screen and UI tree capture.",
+      "properties": {
+        "default_mode": {
+          "type": "string",
+          "enum": [
+            "pruned_tree_diff",
+            "hybrid_som"
+          ],
+          "description": "Default sensing channel."
+        },
+        "attach_screenshot_on": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Conditions under which downscaled screenshot is attached."
+        },
+        "screenshot_max_height": {
+          "type": "integer",
+          "default": 720,
+          "description": "Downscaled height in pixels."
+        },
+        "screenshot_format": {
+          "type": "string",
+          "enum": [
+            "webp",
+            "png",
+            "jpeg"
+          ],
+          "default": "webp"
+        },
+        "screenshot_quality": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "default": 75
+        },
+        "settle_timeout_ms": {
+          "type": "integer",
+          "default": 1500,
+          "description": "Settle timeout after actions in milliseconds."
+        },
+        "redact_status_bar_on_physical": {
+          "type": "boolean",
+          "default": true,
+          "description": "Redact notification bar on physical devices to preserve privacy."
+        }
+      },
+      "additionalProperties": false
+    },
+    "workloads": {
+      "type": "object",
+      "description": "Workload profiles and simulation harnesses.",
+      "required": [
+        "profile"
+      ],
+      "properties": {
+        "profile": {
+          "type": "string",
+          "enum": [
+            "standard",
+            "scam-shield",
+            "video-codec"
+          ],
+          "description": "Active workload test profile."
+        },
+        "mock_server_port": {
+          "type": "integer",
+          "default": 8080,
+          "description": "Local mock server reverse port."
+        },
+        "scam_shield": {
+          "type": "object",
+          "properties": {
+            "check_android17_otp_delay": {
+              "type": "boolean"
+            },
+            "play_policy_justification": {
+              "type": "string"
+            },
+            "forbidden_undeclared_permissions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "video_codec": {
+          "type": "object",
+          "properties": {
+            "fixtures_manifest": {
+              "type": "string"
+            },
+            "device_fixture_dir": {
+              "type": "string"
+            },
+            "oracle_mode": {
+              "type": "string",
+              "enum": [
+                "bit_exact",
+                "quality_bounded"
+              ]
+            },
+            "vmaf_min": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100
+            },
+            "ssim_min": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "max_start_skin_temp_c": {
+              "type": "number"
+            },
+            "enforce_16kb_elf_alignment": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

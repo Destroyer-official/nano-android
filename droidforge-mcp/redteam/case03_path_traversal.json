@@ -1,0 +1,14 @@
+{
+  "id": 3,
+  "name": "case03_path_traversal",
+  "attack": "Path traversal",
+  "description": "Reject file paths that escape workspace root via directory traversal",
+  "tool": "app_install_and_launch",
+  "risk_tier": "WRITE_SCOPED",
+  "args": {
+    "apk_path": "../../../../etc/passwd",
+    "serial": "emulator-5554",
+    "package_id": "com.example.myapp"
+  },
+  "expected_verdict": "DENY"
+}

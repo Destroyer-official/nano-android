@@ -1,0 +1,12 @@
+{
+  "id": 7,
+  "name": "case07_unknown_emulator_serial",
+  "attack": "Unknown emulator serial",
+  "description": "Reject unknown or unauthorized serial in emulator-only trust mode",
+  "tool": "observe_screen",
+  "risk_tier": "READ",
+  "args": {
+    "serial": "192.168.1.50:5555"
+  },
+  "expected_verdict": "DENY"
+}

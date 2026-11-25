@@ -1,0 +1,13 @@
+{
+  "id": 4,
+  "name": "case04_symlink_escape",
+  "attack": "Symlink escape",
+  "description": "Reject paths resolving outside workspace root via symlinks",
+  "tool": "apk_inspect",
+  "risk_tier": "READ",
+  "args": {
+    "apk_path": "test_fixtures/symlink_ssh_key",
+    "target_escape": "~/.ssh/id_rsa"
+  },
+  "expected_verdict": "DENY"
+}

@@ -1,0 +1,136 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://droidforge.dev/schemas/droidforge.policy.schema.json",
+  "title": "DroidForge Security Policy Schema",
+  "description": "Validation schema for droidforge.policy.json hard security policy.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "network",
+    "execution",
+    "sanitization",
+    "human_approval_required",
+    "audit"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "network": {
+      "type": "object",
+      "required": [
+        "bind_host",
+        "allow_unencrypted_adb_tcpip_5555",
+        "allow_tls_wireless_debugging"
+      ],
+      "properties": {
+        "bind_host": {
+          "type": "string",
+          "description": "Host IP to bind MCP server to (must be 127.0.0.1 or localhost)."
+        },
+        "allow_unencrypted_adb_tcpip_5555": {
+          "type": "boolean",
+          "description": "Allow legacy plaintext ADB TCP connections."
+        },
+        "allow_tls_wireless_debugging": {
+          "type": "boolean",
+          "description": "Allow TLS-authenticated wireless debugging."
+        }
+      },
+      "additionalProperties": false
+    },
+    "execution": {
+      "type": "object",
+      "required": [
+        "allow_raw_shell",
+        "enforce_package_scope_lock",
+        "allow_contacts_sms_read_on_physical",
+        "blocked_binaries",
+        "allowed_settings_keys"
+      ],
+      "properties": {
+        "allow_raw_shell": {
+          "type": "boolean",
+          "description": "Whether arbitrary shell commands are permitted (must be false in secure mode)."
+        },
+        "enforce_package_scope_lock": {
+          "type": "boolean",
+          "description": "Strictly gate actions to allowlisted package IDs."
+        },
+        "allow_contacts_sms_read_on_physical": {
+          "type": "boolean",
+          "description": "Protect private personal data on physical phones."
+        },
+        "blocked_binaries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Binaries that cannot be spawned under any circumstance."
+        },
+        "allowed_settings_keys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Settings keys that may be modified via device settings tools."
+        }
+      },
+      "additionalProperties": false
+    },
+    "sanitization": {
+      "type": "object",
+      "required": [
+        "wrap_device_text_with_random_nonce",
+        "strip_zero_width_and_bidi_chars",
+        "max_node_text_bytes",
+        "max_logcat_line_bytes"
+      ],
+      "properties": {
+        "wrap_device_text_with_random_nonce": {
+          "type": "boolean",
+          "description": "Enclose device strings in per-call random cryptographic nonces."
+        },
+        "strip_zero_width_and_bidi_chars": {
+          "type": "boolean",
+          "description": "Filter Unicode directional overrides and invisible characters."
+        },
+        "max_node_text_bytes": {
+          "type": "integer",
+          "minimum": 64
+        },
+        "max_logcat_line_bytes": {
+          "type": "integer",
+          "minimum": 128
+        }
+      },
+      "additionalProperties": false
+    },
+    "human_approval_required": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "High-risk actions that mandate explicit user confirmation."
+    },
+    "audit": {
+      "type": "object",
+      "required": [
+        "log_dir",
+        "retention_days"
+      ],
+      "properties": {
+        "log_dir": {
+          "type": "string"
+        },
+        "retention_days": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

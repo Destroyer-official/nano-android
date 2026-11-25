@@ -1,0 +1,13 @@
+{
+  "id": 5,
+  "name": "case05_system_pkg_destruction",
+  "attack": "System pkg destruction",
+  "description": "Reject any tool call targeting permanent hardcoded system blocklist packages",
+  "tool": "device_reset_state",
+  "risk_tier": "WRITE_SCOPED",
+  "args": {
+    "package_id": "com.android.systemui",
+    "serial": "emulator-5554"
+  },
+  "expected_verdict": "DENY"
+}

@@ -1,0 +1,82 @@
+{
+  "description": "IDE MCP Configuration Templates for DroidForge MCP. Copy the appropriate section into your IDE configuration path.",
+  "ide_configurations": {
+    "claude_code": {
+      "target_file": ".mcp.json",
+      "scope": "project-root",
+      "config": {
+        "mcpServers": {
+          "droidforge": {
+            "command": "droidforge-mcp",
+            "args": [
+              "serve",
+              "--config", "./droidforge.yaml",
+              "--policy", "./droidforge.policy.json"
+            ],
+            "env": {
+              "ANDROID_HOME": "${env:ANDROID_HOME}"
+            }
+          }
+        }
+      }
+    },
+    "cursor": {
+      "target_file": ".cursor/mcp.json",
+      "scope": "workspace",
+      "config": {
+        "mcpServers": {
+          "droidforge": {
+            "command": "droidforge-mcp",
+            "args": [
+              "serve",
+              "--config", "./droidforge.yaml",
+              "--policy", "./droidforge.policy.json"
+            ]
+          }
+        }
+      }
+    },
+    "vscode": {
+      "target_file": ".vscode/mcp.json",
+      "scope": "workspace",
+      "config": {
+        "mcpServers": {
+          "droidforge": {
+            "command": "droidforge-mcp",
+            "args": [
+              "serve",
+              "--config", "./droidforge.yaml",
+              "--policy", "./droidforge.policy.json"
+            ]
+          }
+        }
+      }
+    },
+    "antigravity": {
+      "target_file": "~/.gemini/config/mcp_config.json",
+      "scope": "user-or-workspace",
+      "config": {
+        "mcpServers": {
+          "droidforge": {
+            "command": "droidforge-mcp",
+            "args": [
+              "serve",
+              "--config", "./droidforge.yaml",
+              "--policy", "./droidforge.policy.json"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "mcpServers": {
+    "droidforge": {
+      "command": "droidforge-mcp",
+      "args": [
+        "serve",
+        "--config", "./droidforge.yaml",
+        "--policy", "./droidforge.policy.json"
+      ]
+    }
+  }
+}

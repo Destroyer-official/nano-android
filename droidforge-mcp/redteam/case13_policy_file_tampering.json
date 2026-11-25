@@ -1,0 +1,13 @@
+{
+  "id": 13,
+  "name": "case13_policy_file_tampering",
+  "attack": "Policy file tampering",
+  "description": "Reject tool call attempting to access or overwrite droidforge.policy.json or droidforge.yaml",
+  "tool": "session_freeze_to_maestro",
+  "risk_tier": "WRITE_SCOPED",
+  "args": {
+    "output_path": "droidforge.policy.json",
+    "flow_name": "malicious_flow"
+  },
+  "expected_verdict": "DENY"
+}

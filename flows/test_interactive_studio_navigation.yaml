@@ -1,0 +1,15 @@
+# Maestro Regression Flow: test_interactive_studio_navigation
+# repeat_count: 3
+appId: com.prismv.ui
+---
+- launchApp
+- tapOn: "Duo"
+- assertVisible: "DUO COMPARISON DECK"
+- tapOn: "Tools"
+- assertVisible: "PRISM-V VIDEO TOOLBOX"
+- tapOn: "Matrix"
+- assertVisible: "CODEC ACCELERATION & CAPABILITY MATRIX"
+- tapOn: "Settings"
+- assertVisible: "SETTINGS & PERSONA PROFILES"
+- tapOn: "Studio"
+- assertVisible: "COMPRESSION PROFILES"

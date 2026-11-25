@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "network": {
+    "bind_host": "127.0.0.1",
+    "allow_unencrypted_adb_tcpip_5555": false,
+    "allow_tls_wireless_debugging": true
+  },
+  "execution": {
+    "allow_raw_shell": false,
+    "enforce_package_scope_lock": true,
+    "allow_contacts_sms_read_on_physical": false,
+    "blocked_binaries": [
+      "fastboot",
+      "sh",
+      "bash",
+      "cmd.exe",
+      "powershell.exe"
+    ],
+    "allowed_settings_keys": [
+      "global:window_animation_scale",
+      "global:transition_animation_scale",
+      "global:animator_duration_scale",
+      "system:screen_brightness",
+      "system:screen_brightness_mode"
+    ]
+  },
+  "sanitization": {
+    "wrap_device_text_with_random_nonce": true,
+    "strip_zero_width_and_bidi_chars": true,
+    "max_node_text_bytes": 256,
+    "max_logcat_line_bytes": 512
+  },
+  "human_approval_required": [
+    "register_new_physical_device",
+    "modify_non_allowlisted_package",
+    "run_cloud_farm_beyond_free_quota",
+    "sign_release_artifact"
+  ],
+  "audit": {
+    "log_dir": "~/.droidforge/audit",
+    "retention_days": 90
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://droidforge.dev/schemas/audit-record.schema.json",
+  "title": "DroidForge Audit Log Record Schema",
+  "description": "Validation schema for single JSONL line audit entries.",
+  "type": "object",
+  "required": [
+    "ts",
+    "session_id",
+    "client_ide",
+    "tool",
+    "risk_tier",
+    "policy_decision",
+    "exit_code",
+    "duration_ms"
+  ],
+  "properties": {
+    "ts": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO 8601 UTC timestamp."
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Unique session identifier."
+    },
+    "client_ide": {
+      "type": "string",
+      "description": "Client IDE name (e.g., antigravity, cursor, claude-code, vscode)."
+    },
+    "tool": {
+      "type": "string",
+      "description": "MCP tool name called."
+    },
+    "risk_tier": {
+      "type": "string",
+      "enum": [
+        "READ",
+        "WRITE_SCOPED",
+        "APPROVAL_GATED"
+      ],
+      "description": "Security classification of tool."
+    },
+    "device_serial": {
+      "type": "string",
+      "description": "Target device serial or emulator identifier."
+    },
+    "package_lock": {
+      "type": "string",
+      "description": "Active package boundary."
+    },
+    "args_redacted": {
+      "type": "object",
+      "description": "Sanitized tool input arguments."
+    },
+    "policy_decision": {
+      "type": "string",
+      "enum": [
+        "ALLOW",
+        "DENY",
+        "APPROVAL_REQUIRED",
+        "HALT"
+      ],
+      "description": "Policy guard authorization verdict."
+    },
+    "exit_code": {
+      "type": "integer",
+      "description": "Tool process exit status code."
+    },
+    "duration_ms": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Execution latency in milliseconds."
+    },
+    "ui_hash_after": {
+      "type": "string",
+      "description": "Resulting UI tree hash after mutating actions."
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Artifact files generated during call (screenshots, traces)."
+    }
+  },
+  "additionalProperties": false
+}

@@ -1,0 +1,127 @@
+name: DroidForge CI (Tier 0 JVM + Tier 1 Headless AVD)
+
+on:
+  push:
+    branches: [main, master, "feature/**"]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # =========================================================================
+  # Tier 0: JVM Unit, Robolectric & Roborazzi Screenshot Tests + Static Audit
+  # Target: 0 Boot Time, runs on standard ubuntu-latest runner
+  # =========================================================================
+  tier-0-jvm:
+    name: "Tier 0: JVM & Compliance"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Validate Gradle Wrapper
+        uses: gradle/wrapper-validation-action@v3
+
+      - name: Run Tier 0 JVM Tests (Robolectric + Roborazzi Diff)
+        run: |
+          ./gradlew testDebugUnitTest verifyRoborazziDebug --stacktrace --no-daemon
+
+      - name: Run DroidForge Static Compliance Preflight
+        run: |
+          echo "Verifying Play Policy & 16KB ELF alignment declarations..."
+          test -f docs/templates/play-policy-justification.yaml || test -f play-policy-justification.yaml
+
+      - name: Upload Roborazzi Visual Diff Artifacts (on failure)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: roborazzi-visual-diffs
+          path: '**/build/outputs/roborazzi/**'
+          if-no-files-found: ignore
+
+  # =========================================================================
+  # Tier 1: Frozen Maestro Flows on Headless AVD (Hardware-Free KVM)
+  # Uses reactivecircus/android-emulator-runner@v2
+  # Zero physical devices / Zero cloud device farm spend
+  # =========================================================================
+  tier-1-maestro:
+    name: "Tier 1: Maestro Frozen Flows (Headless AVD)"
+    needs: tier-0-jvm
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Enable KVM Hardware Acceleration
+        run: |
+          echo '--- Verifying KVM availability ---'
+          kvm-ok || true
+          sudo usermod -aG kvm $USER || true
+
+      - name: Install Maestro CLI
+        run: |
+          curl -Ls "https://get.maestro.mobile.dev" | bash
+          echo "$HOME/.maestro/bin" >> $GITHUB_PATH
+
+      - name: Build Debug APK & Test APK
+        run: |
+          ./gradlew assembleDebug --no-daemon
+
+      - name: Run Tier 1 Frozen Maestro Flows on Headless AVD
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          script: |
+            echo "Device booted: $(adb devices)"
+            adb shell settings put global window_animation_scale 0
+            adb shell settings put global transition_animation_scale 0
+            adb shell settings put global animator_duration_scale 0
+            
+            # Install debug app
+            adb install -r -g app/build/outputs/apk/debug/app-debug.apk || true
+            
+            # Run all frozen Maestro flows
+            if [ -d ".droidforge/flows" ]; then
+              for flow in .droidforge/flows/*.yaml; do
+                echo "Running frozen flow: $flow"
+                maestro test "$flow"
+              done
+            else
+              echo "No .droidforge/flows found, skipping flow execution."
+            fi
+
+      - name: Upload Failure Artifact Bundles
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: maestro-failure-bundles
+          path: .droidforge/runs/**/failure_*/**
+          if-no-files-found: ignore

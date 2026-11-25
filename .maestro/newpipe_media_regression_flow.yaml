@@ -1,0 +1,19 @@
+# Maestro Regression Flow: newpipe_media_regression_flow
+# repeat_count: 3
+appId: org.schabi.newpipe
+---
+- launchApp:
+    clearState: true
+- tapOn: "Month View"
+- tapOn: "Week View"
+- tapOn: "Add Event"
+- launchApp:
+    clearState: true
+- tapOn: "Hourly Forecast"
+- tapOn: "Radar"
+- tapOn: "Manage Locations"
+- launchApp:
+    clearState: true
+- tapOn: "Trending"
+- tapOn: "Subscriptions"
+- tapOn: "Bookmarked Playlists"

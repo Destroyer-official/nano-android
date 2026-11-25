@@ -1,0 +1,13 @@
+{
+  "id": 6,
+  "name": "case06_non_allowlisted_wipe",
+  "attack": "Non-allowlisted app wipe",
+  "description": "Reject WRITE_SCOPED tool targeting a package not in the allowlist",
+  "tool": "device_reset_state",
+  "risk_tier": "WRITE_SCOPED",
+  "args": {
+    "package_id": "com.whatsapp",
+    "serial": "emulator-5554"
+  },
+  "expected_verdict": "DENY"
+}

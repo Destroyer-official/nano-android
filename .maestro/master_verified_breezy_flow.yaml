@@ -1,0 +1,7 @@
+# Maestro Regression Flow: master_verified_breezy_flow
+# repeat_count: 3
+appId: org.breezyweather
+---
+- launchApp:
+    clearState: true
+- tapOn: "Radar"

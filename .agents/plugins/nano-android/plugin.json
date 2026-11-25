@@ -1,0 +1,6 @@
+{
+  "name": "nano-android",
+  "version": "1.0.0",
+  "description": "Autonomous zero-emulator Android APK testing, layout rendering, and Maestro test freezing for Antigravity.",
+  "author": "Antigravity Autonomous Lab"
+}

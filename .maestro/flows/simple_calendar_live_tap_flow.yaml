@@ -1,0 +1,16 @@
+# Maestro Regression Flow: simple_calendar_live_tap_flow
+# repeat_count: 3
+appId: com.simplemobiletools.calendar.pro
+---
+- launchApp
+- tapOn: "Duo"
+- assertVisible: "DUO COMPARISON DECK"
+- launchApp:
+    clearState: true
+- tapOn: "Duo"
+- assertVisible: "DUO COMPARISON DECK"
+- tapOn: "Matrix"
+- assertVisible: "Diagnostics"
+- launchApp:
+    clearState: true
+- tapOn: "node_19"

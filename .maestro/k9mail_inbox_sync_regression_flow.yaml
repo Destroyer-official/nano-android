@@ -1,0 +1,24 @@
+# Maestro Regression Flow: k9mail_inbox_sync_regression_flow
+# repeat_count: 3
+appId: com.fsck.k9
+---
+- launchApp:
+    clearState: true
+- tapOn: "Month View"
+- tapOn: "Week View"
+- tapOn: "Add Event"
+- launchApp:
+    clearState: true
+- tapOn: "Hourly Forecast"
+- tapOn: "Radar"
+- tapOn: "Manage Locations"
+- launchApp:
+    clearState: true
+- tapOn: "Trending"
+- tapOn: "Subscriptions"
+- tapOn: "Bookmarked Playlists"
+- launchApp:
+    clearState: true
+- tapOn: "Inbox"
+- tapOn: "Starred"
+- tapOn: "Sent Messages"

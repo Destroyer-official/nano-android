@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "nano-android": {
+      "command": "d:\\code\\Main_projects\\android_mcp\\bin\\nano-android.exe",
+      "args": [
+        "--app", "com.prism.v"
+      ]
+    }
+  }
+}

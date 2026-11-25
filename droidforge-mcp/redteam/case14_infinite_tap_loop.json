@@ -1,0 +1,16 @@
+{
+  "id": 14,
+  "name": "case14_infinite_tap_loop",
+  "attack": "Infinite tap loop",
+  "description": "Circuit breaker fires and halts task when UI hash remains identical 4 times consecutively",
+  "tool": "act_and_observe",
+  "risk_tier": "WRITE_SCOPED",
+  "session_id": "session_tap_loop_14",
+  "ui_hashes": [
+    "ui_hash_stuck_screen_001",
+    "ui_hash_stuck_screen_001",
+    "ui_hash_stuck_screen_001",
+    "ui_hash_stuck_screen_001"
+  ],
+  "expected_verdict": "HALT"
+}

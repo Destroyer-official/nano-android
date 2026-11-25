@@ -1,0 +1,10 @@
+go 1.27.4
+
+use (
+	./droidforge-mcp
+	./engine/ast_input
+	./engine/mcp_compiler
+	./engine/profiler_media
+	./engine/render
+	./engine/runtime
+)
