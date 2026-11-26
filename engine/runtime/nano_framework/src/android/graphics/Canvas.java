@@ -37,6 +37,7 @@ public class Canvas {
     public void drawRoundRect(float left, float top, float right, float bottom, float rx, float ry, Paint paint) {}
     public void drawCircle(float cx, float cy, float radius, Paint paint) {}
     public void drawOval(RectF oval, Paint paint) {}
+    public void drawRect(RectF rect, Paint paint) {}
     public void drawOval(float left, float top, float right, float bottom, Paint paint) {}
     public void drawArc(RectF oval, float startAngle, float sweepAngle, boolean useCenter, Paint paint) {}
     public void drawArc(float left, float top, float right, float bottom, float startAngle, float sweepAngle, boolean useCenter, Paint paint) {}

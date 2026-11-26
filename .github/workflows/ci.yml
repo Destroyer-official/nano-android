@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  go-tests-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+
+      - name: Run Go unit and integration tests
+        run: |
+          for mod in engine/ast_input engine/mcp_compiler engine/profiler_media engine/render engine/runtime droidforge-mcp; do
+            echo "=== Testing $mod ==="
+            (cd "$mod" && go test -count=1 ./...)
+          done
+
+      - name: Verify Go vet and binary builds
+        run: |
+          go vet ./cmd/nano-studio ./engine/ast_input/... ./engine/mcp_compiler/... ./engine/profiler_media/... ./engine/render/... ./engine/runtime/...
+          go build -o bin/nano-studio ./cmd/nano-studio/main.go
+          go build -o bin/nano-android-mcp ./engine/mcp_compiler/cmd
+

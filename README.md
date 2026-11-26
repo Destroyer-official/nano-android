@@ -56,16 +56,17 @@ Nano-Android takes a third approach: run the real compiled Java/Kotlin APK code 
    - Standalone `.jar` targets skip `dex2jar` and boot directly.
 
 2. **Bytecode Instrumentation (`engine/runtime/nano_framework/src/nanoandroid/host/NanoClassLoader.java`)**
-   - Dalvik bytecode compiled back to JVM `.class` files via R8/D8 + `dex2jar` often triggers JVM `VerifyError` or missing-superclass failures on host OpenJDK (for example, uninitialized object flow mismatches, R8 interface/type merging, or AndroidX `View` subclasses missing a matching `(Context, AttributeSet)` constructor).
+   - Dalvik bytecode compiled back to JVM `.class` files via R8/D8 + `dex2jar` often triggers JVM `VerifyError` or missing-superclass failures on host OpenJDK (for example, uninitialized object flow mismatches, R8 interface/type merging, erased anonymous interface classes, skipped intermediate superclass constructors, or AndroidX `View` subclasses missing a matching `(Context, AttributeSet)` constructor).
    - `NanoClassLoader` runs ASM 9.5 (`asm-9.5.jar`, `asm-tree-9.5.jar`, `asm-analysis-9.5.jar`) over loaded classes before `defineClass`:
-     - Repairs stack/local verification type mismatches (`insertCheckcastAtStackOffset`, `repairMethodTypesWithAnalyzer`).
-     - Synthesizes missing forwarding constructors (`injectForwardingInit`) when subclasses invoke constructors omitted by stripped super stubs.
+     - Repairs stack/local verification type mismatches (`insertCheckcastAtStackOffset`, `repairMethodTypesWithAnalyzer`) and un-merges superclass/interface `NEW` allocations to unique concrete subclasses (`tryUnmergeSuperNew`, `findUniqueConcreteSubclass`).
+     - Synthesizes missing forwarding constructors (`injectForwardingInit`) across multi-hop empty-init class hierarchies (`hasSuperInit`) and rewrites skipped-superclass `<init>` calls (including multi-argument Kotlin `PropertyReference` constructors).
+     - Synthesizes dynamic `Proxy` instances (`createDummyInterfaceProxy`) when `dex2jar` erases an anonymous/lambda interface implementation down to `new Object()`.
      - Falls back safely to `sun.misc.Unsafe.allocateInstance` + recursive View/ViewBinding field population when custom third-party views fail standard instantiation.
      - Installs runtime hooks (`onStartActivityHook`, `onStartActivityForResultHook`, `onFinishActivityHook`) to intercept intents cleanly without an Android binder daemon.
 
 3. **Binary Resource Decoding (`ApkResourceTable.java`, `BinaryXmlInflater.java`)**
    - Pure-Java ZIP/binary chunk parsers decode `AndroidManifest.xml` (package name, `Application` class, theme IDs, exported activities, launcher intent filter) and `resources.arsc` (including AAPT2 sparse/offset16 resource type chunks, string pools, dimension/color values, and theme style attributes).
-   - `BinaryXmlInflater` parses compiled `res/layout/*.xml` binary AXML and builds live `android.view.View` / `ViewGroup` instances, resolving `@string/...`, `@color/...`, `@drawable/...`, margins, paddings, layout weights, and text styling.
+   - `BinaryXmlInflater` parses compiled `res/layout/*.xml` and drawable XMLs (including `<layer-list>` -> `LayerDrawable`, `<shape>` -> `GradientDrawable`, and `<vector>` paths) into live `android.view.View` / `Drawable` instances, resolving `@string/...`, `@color/...`, `@drawable/...`, margins, paddings, layout weights, and text styling.
 
 4. **Measure, Layout, Event Loop & Render (`HeadlessAppHost.java`)**
    - Boots `Application.onCreate()`, then pushes the target `Activity` onto a live `Deque<ActivityFrame>` stack and runs `attach()`, `onCreate(Bundle)`, `onStart()`, `onResume()`.
@@ -93,11 +94,11 @@ Nano-Android is a user-space Java framework runtime, not a Linux kernel or ARM e
 
 | Workload Type | Behavior on `nano_jvm` Mode | Notes |
 |---|---|---|
-| Pure JVM Java/Kotlin UI (`Activity`, `LinearLayout`, `FrameLayout`, `ScrollView`, `HorizontalScrollView`, `TextView`, `Button`, `EditText`, `CheckBox`, `Switch`, `SeekBar`, `AlertDialog`, `Dialog`, `Toast`) | **Executes live logic, layout, rendering & persistence** | Verified interactively with real app flows (e.g., Prism-V file picker -> `MediaMetadataRetriever` metadata update -> AI Copilot dialog -> navigation tabs). |
+| Pure JVM Java/Kotlin UI (`Activity`, `LinearLayout`, `FrameLayout`, `ScrollView`, `HorizontalScrollView`, `TextView`, `Button`, `EditText`, `CheckBox`, `Switch`, `SeekBar`, `AlertDialog`, `Dialog`, `Toast`, `PointF`, `RectF`, 3x3 `Matrix`, `Path`, `ShapeDrawable`, `InsetDrawable`, `LayerDrawable`) | **Executes live logic, layout, rendering & persistence** | Verified end-to-end on Prism-V (`file picker -> MediaMetadataRetriever -> AI Copilot dialog -> navigation tabs`) and `SimpleCalendar_v6.23.1.apk` (`SplashActivity -> MainActivity` reaches `RESUMED` with `status: "ok"`, attaching `CoordinatorLayout`, `SwipeRefreshLayout`, `MyViewPager`, `MyFloatingActionButton`, and `AppCompatDialog`). |
 | Compiled AXML layouts (`res/layout/*.xml`) in third-party APKs | **Inflates & renders visually** | Even when an Activity fails startup, `HeadlessAppHost` falls back to static AXML preview (`preview_layout` API / Inspector) and exposes exact JVM stack traces honestly. |
 | Native JNI / C++ libraries (`lib/*.so` ARM64/x86) | **Does not execute on host JVM** | `ApkResourceTable` detects and counts `.so` libs and emits an explicit runtime warning; `adb_device` mode should be used for JNI/codec/FFmpeg paths. |
 | Jetpack Compose / SurfaceView / Vulkan / WebView GPU rendering | **Cannot execute Skia/Vulkan native UI** | Requires `adb_device` execution or static layout inspection. |
-| Unimplemented Android SDK / Material / OEM classes or complex R8 obfuscation | **Partial startup or `ClassNotFoundException` / `NoSuchMethodError` / `VerifyError`** | Example observed in testing: `SimpleCalendar` attaches its `CoordinatorLayout` + `MyFloatingActionButton` (`New Event`), while `MaterialToolbar` initialization halts on an unimplemented `android.graphics.PointF` constructor (`Stub!`) in `android.jar`. |
+| Unimplemented Android SDK / Material / OEM classes or ambiguous R8/dex2jar type erasure | **Partial startup or `ClassCastException` / `NoClassDefFoundError`** | Examples observed in testing: `NewPipe_v0.29.3.apk` clears `Application.onCreate` and enters `MainActivity.onCreate`, halting in desugared `j$.util.stream` on an R8-erased `Object` return from `Supplier.get()`; `BreezyWeather_v6.2.2.apk` (`target_sdk: 36`) passes Hilt DI and halts on missing optional JSSE provider `org.bouncycastle.jsse.BCSSLSocket`; `k9mail-25.0.apk` halts in Koin DI due to ambiguous constructorless `InstanceFactory` subclasses. |
 
 ---
 
@@ -117,7 +118,8 @@ Nano-Android is a user-space Java framework runtime, not a Linux kernel or ARM e
 │   ├── render/                   # Host layout/rasterizer/webp helpers
 │   └── runtime/
 │       ├── nano_framework/src/   # Pure-Java Android SDK surface + `nanoandroid.host.*` runtime
-│       └── rebuild_nano_framework.ps1 # Compiles 186 Java files + bundles ASM 9.5 into nano-framework.jar
+│       └── rebuild_nano_framework.ps1 # Compiles 194 Java files + bundles ASM 9.5 into nano-framework.jar
+├── .github/workflows/ci.yml      # GitHub Actions CI running Go tests, go vet, and binary builds
 ├── droidforge-mcp/               # Companion DroidForge ADB/device/emulator/audit Go MCP module
 ├── flows/                        # Saved Maestro YAML flows
 └── go.work                       # Go workspace linking all 6 Go modules

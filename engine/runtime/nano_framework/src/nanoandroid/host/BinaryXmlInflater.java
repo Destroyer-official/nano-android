@@ -705,6 +705,10 @@ public class BinaryXmlInflater {
 
         String rootTag = "";
         GradientDrawable shapeDrawable = null;
+        java.util.List<Drawable> layerDrawables = new ArrayList<>();
+        java.util.List<Integer> layerIds = new ArrayList<>();
+        int currentItemId = 0;
+        Drawable currentItemDrawable = null;
         int vecW = 48, vecH = 48;
         float vpW = 24f, vpH = 24f;
         BufferedImage vecImg = null;
@@ -717,6 +721,17 @@ public class BinaryXmlInflater {
 
             if (chunkType == 0x0001) {
                 pool = ApkResourceTable.parseStringPool(data, offset, chunkSize);
+            } else if (chunkType == 0x0103 && offset + 24 <= data.length) {
+                int nameIdx = buf.getInt(offset + 20);
+                String endTag = (nameIdx >= 0 && nameIdx < pool.size()) ? pool.get(nameIdx) : "";
+                if ("layer-list".equals(rootTag) && "item".equals(endTag)) {
+                    Drawable itemD = currentItemDrawable != null ? currentItemDrawable : new ColorDrawable(0);
+                    layerDrawables.add(itemD);
+                    layerIds.add(currentItemId);
+                    currentItemId = 0;
+                    currentItemDrawable = null;
+                    shapeDrawable = null;
+                }
             } else if (chunkType == 0x0102 && offset + 36 <= data.length) {
                 int nameIdx = buf.getInt(offset + 20);
                 String tag = (nameIdx >= 0 && nameIdx < pool.size()) ? pool.get(nameIdx) : "";
@@ -742,10 +757,24 @@ public class BinaryXmlInflater {
                     aOff += attrSize;
                 }
 
-                if ("shape".equals(tag)) {
+                if ("layer-list".equals(rootTag) && "item".equals(tag)) {
+                    currentItemId = 0;
+                    currentItemDrawable = null;
+                    shapeDrawable = null;
+                    for (AxmlAttr a : attrs) {
+                        if ("id".equals(a.name) && a.data != 0) {
+                            currentItemId = a.data;
+                        } else if ("drawable".equals(a.name) && a.data != 0) {
+                            currentItemDrawable = loadDrawableById(a.data, ctx, table);
+                        }
+                    }
+                } else if ("shape".equals(tag)) {
                     shapeDrawable = new GradientDrawable();
                     for (AxmlAttr a : attrs) {
                         if ("shape".equals(a.name)) shapeDrawable.setShape(a.data);
+                    }
+                    if ("layer-list".equals(rootTag)) {
+                        currentItemDrawable = shapeDrawable;
                     }
                 } else if (shapeDrawable != null && "solid".equals(tag)) {
                     for (AxmlAttr a : attrs) {
@@ -802,6 +831,16 @@ public class BinaryXmlInflater {
             offset += chunkSize;
         }
 
+        if ("layer-list".equals(rootTag)) {
+            LayerDrawable ld = new LayerDrawable(layerDrawables.toArray(new Drawable[0]));
+            for (int idx = 0; idx < layerIds.size(); idx++) {
+                int lid = layerIds.get(idx);
+                if (lid != 0) {
+                    ld.setDrawableByLayerId(lid, layerDrawables.get(idx));
+                }
+            }
+            return ld;
+        }
         if (vecG != null) {
             vecG.dispose();
             return new BitmapDrawable(ctx != null ? ctx.getResources() : null, new Bitmap(vecImg));

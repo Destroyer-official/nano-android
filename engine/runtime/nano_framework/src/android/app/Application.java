@@ -22,6 +22,12 @@ public class Application extends ContextWrapper implements ComponentCallbacks2 {
 
     public Application() { super(null); }
 
+    public static String getProcessName() {
+        return Activity.currentApplication != null && Activity.currentApplication.getPackageName() != null
+                ? Activity.currentApplication.getPackageName()
+                : "nano.android.app";
+    }
+
     @Override
     public void attachBaseContext(Context base) {
         super.attachBaseContext(base);

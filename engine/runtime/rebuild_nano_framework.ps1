@@ -35,5 +35,9 @@ Pop-Location
 
 Write-Host "Packaging $jarFile..."
 jar cf $jarFile -C $binDir .
+if ($LASTEXITCODE -ne 0) {
+    Write-Error "jar packaging failed! (Is another process locking $jarFile?)"
+    exit 1
+}
 
 Write-Host "SUCCESS! $jarFile updated successfully."

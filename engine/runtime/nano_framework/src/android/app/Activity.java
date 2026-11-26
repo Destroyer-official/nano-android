@@ -40,6 +40,7 @@ public class Activity extends ContextThemeWrapper implements Window.Callback, Co
 
     public Activity() {
         super(null);
+        this.window.setCallback(this);
     }
 
     public Application getApplication() {

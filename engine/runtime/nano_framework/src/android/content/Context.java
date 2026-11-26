@@ -116,12 +116,24 @@ public class Context {
         return !f.exists() || f.delete();
     }
 
+    public CharSequence getText(int resId) {
+        return getString(resId);
+    }
+
     public String getString(int resId) {
         return resources.getString(resId);
     }
 
     public String getString(int resId, Object... formatArgs) {
         return resources.getString(resId, formatArgs);
+    }
+
+    public int getColor(int id) {
+        return getResources().getColor(id);
+    }
+
+    public android.content.res.ColorStateList getColorStateList(int id) {
+        return getResources().getColorStateList(id);
     }
 
     public void setTheme(int resid) {}

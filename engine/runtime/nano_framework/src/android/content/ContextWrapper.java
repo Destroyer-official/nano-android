@@ -85,6 +85,11 @@ public class ContextWrapper extends Context {
     }
 
     @Override
+    public CharSequence getText(int resId) {
+        return mBase != null ? mBase.getText(resId) : super.getText(resId);
+    }
+
+    @Override
     public String getString(int resId) {
         return mBase != null ? mBase.getString(resId) : super.getString(resId);
     }
@@ -92,6 +97,16 @@ public class ContextWrapper extends Context {
     @Override
     public String getString(int resId, Object... formatArgs) {
         return mBase != null ? mBase.getString(resId, formatArgs) : super.getString(resId, formatArgs);
+    }
+
+    @Override
+    public int getColor(int id) {
+        return mBase != null ? mBase.getColor(id) : super.getColor(id);
+    }
+
+    @Override
+    public android.content.res.ColorStateList getColorStateList(int id) {
+        return mBase != null ? mBase.getColorStateList(id) : super.getColorStateList(id);
     }
 
     @Override
