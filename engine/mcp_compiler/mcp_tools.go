@@ -4,10 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
+
+	"nano_android/engine/apk/ingest"
+	"nano_android/engine/compatibility/registry"
+	"nano_android/engine/security/audit"
+	"nano_android/engine/security/pathcontainment"
+	"nano_android/engine/security/policy"
 )
 
 // ToolResult represents standard MCP tool response content.
@@ -30,28 +37,48 @@ type ToolDefinition struct {
 	Handler     func(ctx context.Context, args map[string]any) (*ToolResult, error)
 }
 
-// ToolRegistry manages registration and dispatch of Nano-Android MCP tools.
+// ToolRegistry manages registration and policy-gated dispatch of Nano-Android MCP tools.
 type ToolRegistry struct {
 	mu       sync.RWMutex
 	tools    map[string]ToolDefinition
 	coord    Coordinator
 	compiler *MaestroCompiler
+	guard    *policy.Guard
+	ledger   *audit.Ledger
+	hooks    Phase3Hooks
+	hooks5   Phase5Hooks
+	hooks6   Phase6Hooks
 }
 
-// NewToolRegistry constructs a registry with all Nano-Android tools registered.
+// NewToolRegistry constructs a registry with all Nano-Android tools registered and unified security policy attached.
 func NewToolRegistry(coord Coordinator, compiler *MaestroCompiler) *ToolRegistry {
 	if compiler == nil {
 		compiler = NewMaestroCompiler("com.prism.v")
 	}
 
+	ledgerPath := filepath.Join(resolveCacheDir(), "audit", "nano_mcp_audit.jsonl")
+	ledger, _ := audit.OpenLedger(ledgerPath)
+
 	reg := &ToolRegistry{
 		tools:    make(map[string]ToolDefinition),
 		coord:    coord,
 		compiler: compiler,
+		guard:    policy.NewGuard(policy.DefaultConfig()),
+		ledger:   ledger,
 	}
 
 	reg.registerAllTools()
 	return reg
+}
+
+// SetPolicyGuard replaces the active policy guard (e.g. from loaded project config).
+func (r *ToolRegistry) SetPolicyGuard(g *policy.Guard) {
+	if g == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.guard = g
 }
 
 // GetCoordinator returns the bound Coordinator.
@@ -94,24 +121,57 @@ func (r *ToolRegistry) List() []ToolDefinition {
 	return list
 }
 
-// Call invokes a registered tool by name with arguments.
+// Call invokes a registered tool by name with arguments after synchronous policy evaluation and audit logging.
 func (r *ToolRegistry) Call(ctx context.Context, name string, args map[string]any) (*ToolResult, error) {
 	r.mu.RLock()
 	tool, ok := r.tools[name]
+	guard := r.guard
+	ledger := r.ledger
 	r.mu.RUnlock()
 
+	if args == nil {
+		args = make(map[string]any)
+	}
+
 	if !ok {
+		if ledger != nil {
+			_, _ = ledger.Record("mcp", "agent", name, "", "DENY", "unknown tool", args)
+		}
 		return &ToolResult{
 			Content: []TextContent{{Type: "text", Text: fmt.Sprintf("Error: unknown tool %q", name)}},
 			IsError: true,
 		}, fmt.Errorf("tool not found: %s", name)
 	}
 
-	if args == nil {
-		args = make(map[string]any)
+	if guard != nil {
+		sessionID, _ := args["session_id"].(string)
+		ev := guard.EvaluateTool(sessionID, name, args)
+		if ev.Decision != policy.DecisionAllow {
+			if ledger != nil {
+				_, _ = ledger.Record("mcp", "agent", name, "", string(ev.Decision), ev.Reason, args)
+			}
+			return &ToolResult{
+				Content: []TextContent{{Type: "text", Text: fmt.Sprintf("BLOCKED_POLICY (%s): %s", ev.Decision, ev.Reason)}},
+				IsError: true,
+			}, fmt.Errorf("policy %s: %s", ev.Decision, ev.Reason)
+		}
 	}
 
-	return tool.Handler(ctx, args)
+	res, err := tool.Handler(ctx, args)
+	if ledger != nil {
+		decision := "ALLOW"
+		reason := "ok"
+		if err != nil || (res != nil && res.IsError) {
+			decision = "ERROR"
+			if err != nil {
+				reason = err.Error()
+			} else if len(res.Content) > 0 {
+				reason = res.Content[0].Text
+			}
+		}
+		_, _ = ledger.Record("mcp", "agent", name, "", decision, reason, args)
+	}
+	return res, err
 }
 
 func (r *ToolRegistry) registerAllTools() {
@@ -368,14 +428,66 @@ func (r *ToolRegistry) registerAllTools() {
 		},
 		Handler: r.handleDoctor,
 	})
+
+	// 11. nano_inspect_apk
+	r.Register(ToolDefinition{
+		Name:        "nano_inspect_apk",
+		Description: "Performs Tier-0 static APK/AAB/APKS/XAPK ingestion (manifest, DEX, resources, signing, ELF libs) and adaptive backend compatibility evaluation.",
+		InputSchema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"apk_path": map[string]any{
+					"type":        "string",
+					"description": "Path to .apk, .aab, .apks, or .xapk file inside allowed workspace roots.",
+				},
+				"compare_with_path": map[string]any{
+					"type":        "string",
+					"description": "Optional second APK/AAB path for structural diff comparison.",
+				},
+				"requested_mode": map[string]any{
+					"type":        "string",
+					"description": "Optional backend mode ('auto', 'nano_jvm', 'robolectric', 'android_art', 'physical_device').",
+				},
+			},
+			"required": []string{"apk_path"},
+		},
+		Handler: r.handleInspectAPK,
+	})
+
+	r.registerPhase2GroupTools()
+	r.registerPhase3Tools()
+	r.registerPhase5Tools()
+	r.registerPhase6Tools()
 }
 
 // --- TOOL HANDLER IMPLEMENTATIONS ---
 
 func (r *ToolRegistry) handleLaunchApp(ctx context.Context, args map[string]any) (*ToolResult, error) {
 	apkPath, _ := args["apk_path"].(string)
+	apkPath = strings.TrimSpace(apkPath)
 	if apkPath == "" {
 		return makeErrorResult("apk_path is required")
+	}
+	if err := pathcontainment.CheckPathSyntax(apkPath); err != nil {
+		return makeErrorResult(fmt.Sprintf("invalid apk_path: %v", err))
+	}
+	lowExt := strings.ToLower(filepath.Ext(apkPath))
+	if lowExt != ".apk" && lowExt != ".jar" {
+		return makeErrorResult("invalid apk_path: must end with .apk or .jar")
+	}
+	// Enforce root containment for live execution coordinators (while allowing virtual mock paths in MockCoordinator unit tests).
+	if _, isMock := r.coord.(*MockCoordinator); !isMock {
+		allowedRoots := []string{
+			resolveCacheDir(),
+			resolvePath("downloads"),
+			resolvePath("tools"),
+			resolvePath("fixtures"),
+		}
+		contained, err := pathcontainment.ResolveExistingContained(apkPath, allowedRoots, []string{".apk", ".jar"})
+		if err != nil {
+			return makeErrorResult(fmt.Sprintf("BLOCKED_POLICY apk_path outside workspace roots: %v", err))
+		}
+		apkPath = contained
 	}
 	activity, _ := args["activity"].(string)
 	clearState, _ := args["clear_state"].(bool)
@@ -385,6 +497,7 @@ func (r *ToolRegistry) handleLaunchApp(ctx context.Context, args map[string]any)
 		return makeErrorResult(fmt.Sprintf("launch failed: %v", err))
 	}
 
+	sanitizeLaunchResult(res)
 	r.compiler.RecordLaunch(res.AppID, clearState)
 	return makeJSONResult(res)
 }
@@ -405,6 +518,7 @@ func (r *ToolRegistry) handleObserveScreen(ctx context.Context, args map[string]
 		return makeErrorResult(fmt.Sprintf("observe screen failed: %v", err))
 	}
 
+	sanitizeObserveResult(res)
 	if res.AST != nil {
 		r.compiler.UpdateAST(res.AST)
 	}
@@ -540,6 +654,29 @@ func (r *ToolRegistry) handleFreezeTest(ctx context.Context, args map[string]any
 		repeatCount = int(rc)
 	}
 	outputPath, _ := args["output_path"].(string)
+	outputPath = strings.TrimSpace(outputPath)
+	if outputPath != "" {
+		if err := pathcontainment.CheckPathSyntax(outputPath); err != nil {
+			return makeErrorResult(fmt.Sprintf("invalid output_path: %v", err))
+		}
+		cleanOut := filepath.Clean(outputPath)
+		ext := strings.ToLower(filepath.Ext(cleanOut))
+		if ext != ".yaml" && ext != ".yml" {
+			return makeErrorResult("invalid output_path: must end with .yaml or .yml")
+		}
+		if _, isMock := r.coord.(*MockCoordinator); !isMock {
+			flowsDir := resolvePath("flows")
+			if flowsDir == "" {
+				flowsDir = filepath.Join(resolveCacheDir(), "flows")
+			}
+			containedOut, wErr := pathcontainment.ResolveWriteContained(flowsDir, filepath.Base(cleanOut), []string{".yaml", ".yml"})
+			if wErr != nil {
+				return makeErrorResult(fmt.Sprintf("BLOCKED_POLICY invalid output_path: %v", wErr))
+			}
+			cleanOut = containedOut
+		}
+		outputPath = cleanOut
+	}
 	wrapRepeat, _ := args["wrap_repeat"].(bool)
 	optimize := true
 	if opt, ok := args["optimize"].(bool); ok {
@@ -744,6 +881,56 @@ func (r *ToolRegistry) handleDoctor(ctx context.Context, args map[string]any) (*
 	return makeJSONResult(report)
 }
 
+func (r *ToolRegistry) handleInspectAPK(ctx context.Context, args map[string]any) (*ToolResult, error) {
+	apkPath, _ := args["apk_path"].(string)
+	apkPath = strings.TrimSpace(apkPath)
+	if apkPath == "" {
+		return makeErrorResult("apk_path is required")
+	}
+	allowedRoots := []string{
+		resolveCacheDir(),
+		resolvePath("downloads"),
+		resolvePath("tools"),
+		resolvePath("fixtures"),
+	}
+	contained, err := pathcontainment.ResolveExistingContained(apkPath, allowedRoots, []string{".apk", ".aab", ".apks", ".xapk"})
+	if err != nil {
+		return makeErrorResult(fmt.Sprintf("BLOCKED_POLICY apk_path outside workspace roots: %v", err))
+	}
+	requestedMode, _ := args["requested_mode"].(string)
+	bundletoolJar := resolvePath(
+		filepath.Join("tools", "libs", "bundletool-all-1.18.1.jar"),
+		filepath.Join("..", "..", "tools", "libs", "bundletool-all-1.18.1.jar"),
+	)
+	eng := ingest.NewEngine(filepath.Join(resolveCacheDir(), "apk_intel"), bundletoolJar)
+	rep, err := eng.Analyze(contained)
+	if err != nil {
+		return makeErrorResult(fmt.Sprintf("static APK ingestion failed: %v", err))
+	}
+	rec := registry.EvaluateAPK(rep, requestedMode)
+
+	payload := map[string]any{
+		"status":         "ok",
+		"tier":           "static",
+		"report":         rep,
+		"recommendation": rec,
+	}
+
+	if cmpPath, _ := args["compare_with_path"].(string); strings.TrimSpace(cmpPath) != "" {
+		containedCmp, cmpErr := pathcontainment.ResolveExistingContained(cmpPath, allowedRoots, []string{".apk", ".aab", ".apks", ".xapk"})
+		if cmpErr != nil {
+			return makeErrorResult(fmt.Sprintf("BLOCKED_POLICY compare_with_path outside workspace roots: %v", cmpErr))
+		}
+		rep2, ingErr := eng.Analyze(containedCmp)
+		if ingErr != nil {
+			return makeErrorResult(fmt.Sprintf("comparison APK ingestion failed: %v", ingErr))
+		}
+		payload["comparison"] = ingest.Compare(rep, rep2)
+	}
+
+	return makeJSONResult(payload)
+}
+
 // Helpers
 
 func makeJSONResult(v any) (*ToolResult, error) {
@@ -772,4 +959,56 @@ func makeErrorResult(msg string) (*ToolResult, error) {
 		},
 		IsError: true,
 	}, nil
+}
+
+// sanitizeDeviceText strips Unicode bidi overrides and zero-width characters
+// and caps length to neutralize hostile-APK UI spoofing or context bombs.
+func sanitizeDeviceText(raw string, maxBytes int) string {
+	if raw == "" {
+		return ""
+	}
+	s := policy.StripObfuscation(raw)
+	if maxBytes > 0 && len(s) > maxBytes {
+		runes := []rune(s)
+		for len(string(runes)) > maxBytes && len(runes) > 0 {
+			runes = runes[:len(runes)-1]
+		}
+		s = string(runes)
+	}
+	return s
+}
+
+func sanitizeASTNode(node *ASTNode) {
+	if node == nil {
+		return
+	}
+	node.Text = sanitizeDeviceText(node.Text, 512)
+	node.ContentDescription = sanitizeDeviceText(node.ContentDescription, 512)
+	for _, child := range node.Children {
+		sanitizeASTNode(child)
+	}
+}
+
+func sanitizeObserveResult(res *ObserveResult) {
+	if res == nil {
+		return
+	}
+	res.ActiveDialog = sanitizeDeviceText(res.ActiveDialog, 512)
+	res.Toast = sanitizeDeviceText(res.Toast, 512)
+	for i := range res.VisibleTexts {
+		res.VisibleTexts[i] = sanitizeDeviceText(res.VisibleTexts[i], 512)
+	}
+	sanitizeASTNode(res.AST)
+}
+
+func sanitizeLaunchResult(res *LaunchResult) {
+	if res == nil {
+		return
+	}
+	res.AppLabel = sanitizeDeviceText(res.AppLabel, 256)
+	res.Error = sanitizeDeviceText(res.Error, 2048)
+	res.ExceptionTrace = sanitizeDeviceText(res.ExceptionTrace, 4096)
+	for i := range res.Warnings {
+		res.Warnings[i] = sanitizeDeviceText(res.Warnings[i], 512)
+	}
 }

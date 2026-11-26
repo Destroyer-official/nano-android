@@ -87,13 +87,17 @@ func (r *PythonSidecarRunner) VerifyMedia(ctx context.Context, srcPath, dstPath,
 	// Try uv run first if uv is installed
 	var cmd *exec.Cmd
 	absSidecarDir, _ := filepath.Abs(r.SidecarDir)
+	pythonExe := "python3"
+	if _, pErr := exec.LookPath(pythonExe); pErr != nil {
+		pythonExe = "python"
+	}
 	if _, err := exec.LookPath("uv"); err == nil {
 		cmdArgs := append([]string{"run", "--project", absSidecarDir, "df-verify-media"}, args...)
 		cmd = exec.CommandContext(ctx, "uv", cmdArgs...)
 	} else {
 		scriptPath := filepath.Join(absSidecarDir, "df_verify_media.py")
 		cmdArgs := append([]string{scriptPath}, args...)
-		cmd = exec.CommandContext(ctx, "python", cmdArgs...)
+		cmd = exec.CommandContext(ctx, pythonExe, cmdArgs...)
 	}
 
 	output, err := cmd.CombinedOutput()
@@ -101,7 +105,7 @@ func (r *PythonSidecarRunner) VerifyMedia(ctx context.Context, srcPath, dstPath,
 		// Try fallback directly with python
 		scriptPath := filepath.Join(absSidecarDir, "df_verify_media.py")
 		cmdArgs := append([]string{scriptPath}, args...)
-		fallbackCmd := exec.CommandContext(ctx, "python", cmdArgs...)
+		fallbackCmd := exec.CommandContext(ctx, pythonExe, cmdArgs...)
 		fallbackOut, fallbackErr := fallbackCmd.CombinedOutput()
 		if fallbackErr != nil {
 			return nil, fmt.Errorf("df-verify-media failed: %v (output: %s; fallback: %s)", err, string(output), string(fallbackOut))

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -43,10 +44,16 @@ func TestCLI_Serve_Piped(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	binPath := filepath.Join(tmpDir, "droidforge-mcp.exe")
+	binName := "droidforge-mcp"
+	if runtime.GOOS == "windows" {
+		binName += ".exe"
+	}
+	binPath := filepath.Join(tmpDir, binName)
 	buildCmd := exec.Command("go", "build", "-o", binPath, ".")
 	buildCmd.Dir = "."
-	buildCmd.Env = append(os.Environ(), `PATH=C:\Program Files\Go\bin;`+os.Getenv("PATH"))
+	if _, err := exec.LookPath("go"); err != nil && runtime.GOOS == "windows" {
+		buildCmd.Env = append(os.Environ(), `PATH=C:\Program Files\Go\bin;`+os.Getenv("PATH"))
+	}
 	if out, err := buildCmd.CombinedOutput(); err != nil {
 		t.Fatalf("go build failed: %v\nOutput: %s", err, string(out))
 	}

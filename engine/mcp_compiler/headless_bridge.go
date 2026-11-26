@@ -10,9 +10,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
+
+	"nano_android/engine/apk/ingest"
+	"nano_android/engine/compatibility/registry"
+	"nano_android/engine/security/archive"
+	"nano_android/engine/security/pathcontainment"
+	"nano_android/engine/security/worker_isolation"
 )
 
 // LayoutEntry represents one compiled binary AXML layout file inside an APK.
@@ -30,33 +37,99 @@ type LayoutPreviewResult struct {
 	Error  string `json:"error,omitempty"`
 }
 
-// RuntimeMetrics holds real JVM memory, GC, classloader, and virtual uptime stats from HeadlessAppHost.
+// RuntimeMetrics holds real JVM memory, GC, classloader, thread/looper, and virtual uptime stats from HeadlessAppHost.
 type RuntimeMetrics struct {
-	UsedMB          float64 `json:"used_mb"`
-	FreeMB          float64 `json:"free_mb"`
-	MaxMB           float64 `json:"max_mb"`
-	GCCycles        int64   `json:"gc_cycles"`
-	LoadedClasses   int64   `json:"loaded_classes"`
-	TotalViews      int64   `json:"total_views"`
-	VirtualUptimeMs int64   `json:"virtual_uptime_ms"`
-	Package         string  `json:"package"`
-	Activity        string  `json:"activity"`
+	UsedMB            float64 `json:"used_mb"`
+	FreeMB            float64 `json:"free_mb"`
+	MaxMB             float64 `json:"max_mb"`
+	GCCycles          int64   `json:"gc_cycles"`
+	LoadedClasses     int64   `json:"loaded_classes"`
+	TotalViews        int64   `json:"total_views"`
+	VirtualUptimeMs   int64   `json:"virtual_uptime_ms"`
+	ThreadCount       int     `json:"thread_count"`
+	DeadlockedThreads int     `json:"deadlocked_threads"`
+	LooperQueueDepth  int     `json:"looper_queue_depth"`
+	TimelineEvents    int     `json:"timeline_events"`
+	Package           string  `json:"package"`
+	Activity          string  `json:"activity"`
 }
 
-// LiveHeadlessBridge manages the zero-emulator HeadlessAppHost JVM process.
+// HostTimelineEvent matches ForensicTimeline JSON entries emitted by HeadlessAppHost.
+type HostTimelineEvent struct {
+	Seq             int64  `json:"seq"`
+	TimestampNs     int64  `json:"timestamp_ns"`
+	VirtualUptimeMs int64  `json:"virtual_uptime_ms"`
+	EventType       string `json:"event_type"`
+	Source          string `json:"source"`
+	Backend         string `json:"backend"`
+	CorrelationID   string `json:"correlation_id"`
+	Details         string `json:"details"`
+}
+
+// HostThreadInfo reports live JVM thread inspection and deadlock detection results.
+type HostThreadInfo struct {
+	ID           int64  `json:"id"`
+	Name         string `json:"name"`
+	State        string `json:"state"`
+	Deadlocked   bool   `json:"deadlocked"`
+	BlockedCount int64  `json:"blocked_count"`
+	WaitedCount  int64  `json:"waited_count"`
+}
+
+// HostThreadReport aggregates JVM thread telemetry and Looper queue depth.
+type HostThreadReport struct {
+	ThreadCount      int              `json:"thread_count"`
+	DeadlockedCount  int              `json:"deadlocked_count"`
+	LooperQueueDepth int              `json:"looper_queue_depth"`
+	Threads          []HostThreadInfo `json:"threads"`
+}
+
+// HostStorageSnapshot captures live SQLite table row counts and SharedPreferences keys/values.
+type HostStorageSnapshot struct {
+	SQLiteTables map[string]string `json:"sqlite_tables"`
+	Preferences  map[string]string `json:"preferences"`
+}
+
+// LiveHeadlessBridge manages the OS-isolated, zero-emulator HeadlessAppHost JVM worker.
 type LiveHeadlessBridge struct {
-	mu      sync.Mutex
-	cmd     *exec.Cmd
-	stdin   io.WriteCloser
-	reader  *bufio.Reader
-	active  bool
-	jarPath string
-	apkPath string
+	mu                  sync.Mutex
+	cmd                 *exec.Cmd
+	workerHandle        *worker_isolation.IsolatedHandle
+	workerWorkspace     *worker_isolation.WorkerWorkspace
+	stdin               io.WriteCloser
+	reader              *bufio.Reader
+	active              bool
+	jarPath             string
+	apkPath             string
+	SandboxRootOverride string
 }
 
 // NewLiveHeadlessBridge initializes a new headless bridge.
 func NewLiveHeadlessBridge() *LiveHeadlessBridge {
 	return &LiveHeadlessBridge{}
+}
+
+func workspaceRootCandidates() []string {
+	var roots []string
+	if envRoot := strings.TrimSpace(os.Getenv("NANO_ANDROID_HOME")); envRoot != "" {
+		roots = append(roots, envRoot)
+	}
+	if wd, err := os.Getwd(); err == nil {
+		cur := wd
+		for i := 0; i < 4; i++ {
+			roots = append(roots, cur)
+			parent := filepath.Dir(cur)
+			if parent == cur {
+				break
+			}
+			cur = parent
+		}
+	}
+	if exe, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exe)
+		roots = append(roots, exeDir, filepath.Dir(exeDir))
+	}
+	return roots
 }
 
 func resolvePath(candidates ...string) string {
@@ -71,6 +144,17 @@ func resolvePath(candidates ...string) string {
 			}
 			return p
 		}
+		if !filepath.IsAbs(p) {
+			for _, root := range workspaceRootCandidates() {
+				joined := filepath.Join(root, p)
+				if _, err := os.Stat(joined); err == nil {
+					if abs, err := filepath.Abs(joined); err == nil {
+						return abs
+					}
+					return joined
+				}
+			}
+		}
 	}
 	if len(candidates) > 0 {
 		return candidates[0]
@@ -79,24 +163,39 @@ func resolvePath(candidates ...string) string {
 }
 
 func resolveCacheDir() string {
+	if envCache := strings.TrimSpace(os.Getenv("NANO_CACHE_DIR")); envCache != "" {
+		_ = os.MkdirAll(envCache, 0755)
+		if abs, err := filepath.Abs(envCache); err == nil {
+			return abs
+		}
+		return envCache
+	}
+	for _, root := range workspaceRootCandidates() {
+		if _, err := os.Stat(filepath.Join(root, "go.work")); err == nil {
+			c := filepath.Join(root, "cache")
+			if err := os.MkdirAll(c, 0755); err == nil {
+				return c
+			}
+		}
+	}
 	candidates := []string{
 		"cache",
 		filepath.Join("..", "..", "cache"),
-		`d:\code\Main_projects\android_mcp\cache`,
 	}
 	for _, c := range candidates {
 		parent := filepath.Dir(c)
 		if info, err := os.Stat(parent); err == nil && info.IsDir() {
-			_ = os.MkdirAll(c, 0755)
-			abs, err := filepath.Abs(c)
-			if err == nil {
-				return abs
+			if err := os.MkdirAll(c, 0755); err == nil {
+				if abs, err := filepath.Abs(c); err == nil {
+					return abs
+				}
+				return c
 			}
-			return c
 		}
 	}
-	_ = os.MkdirAll(`d:\code\Main_projects\android_mcp\cache`, 0755)
-	return `d:\code\Main_projects\android_mcp\cache`
+	fallback := filepath.Join(os.TempDir(), "nano-android-cache")
+	_ = os.MkdirAll(fallback, 0755)
+	return fallback
 }
 
 func fileSHA256Short(path string) (string, error) {
@@ -122,7 +221,6 @@ func (b *LiveHeadlessBridge) PrepareArtifacts(apkOrJarPath string) (jarPath stri
 	resolved := resolvePath(
 		apkOrJarPath,
 		filepath.Join("..", "..", apkOrJarPath),
-		filepath.Join(`d:\code\Main_projects\android_mcp`, apkOrJarPath),
 	)
 	info, statErr := os.Stat(resolved)
 	if statErr != nil || info.IsDir() {
@@ -130,11 +228,17 @@ func (b *LiveHeadlessBridge) PrepareArtifacts(apkOrJarPath string) (jarPath stri
 	}
 
 	lower := strings.ToLower(resolved)
+	if !strings.HasSuffix(lower, ".jar") && !strings.HasSuffix(lower, ".apk") {
+		return "", "", fmt.Errorf("unsupported file extension (expected .apk or .jar): %s", filepath.Base(resolved))
+	}
+
+	// P0: Validate archive integrity, ZIP bomb limits, symlinks, zip-slip, and Janus polyglots before any ingestion.
+	if _, valErr := archive.ValidateArchive(resolved, archive.DefaultLimits()); valErr != nil {
+		return "", resolved, fmt.Errorf("archive security validation failed for %s: %w", filepath.Base(resolved), valErr)
+	}
+
 	if strings.HasSuffix(lower, ".jar") {
 		return resolved, "", nil
-	}
-	if !strings.HasSuffix(lower, ".apk") {
-		return "", "", fmt.Errorf("unsupported file extension (expected .apk or .jar): %s", filepath.Base(resolved))
 	}
 
 	hashHex, err := fileSHA256Short(resolved)
@@ -148,29 +252,70 @@ func (b *LiveHeadlessBridge) PrepareArtifacts(apkOrJarPath string) (jarPath stri
 		return cachedJar, resolved, nil
 	}
 
+	d2jScript := "d2j-dex2jar.sh"
+	if runtime.GOOS == "windows" {
+		d2jScript = "d2j-dex2jar.bat"
+	}
 	d2j := resolvePath(
-		filepath.Join("tools", "dex-tools-v2.4", "d2j-dex2jar.bat"),
-		filepath.Join("..", "..", "tools", "dex-tools-v2.4", "d2j-dex2jar.bat"),
-		`d:\code\Main_projects\android_mcp\tools\dex-tools-v2.4\d2j-dex2jar.bat`,
+		filepath.Join("tools", "dex-tools-v2.4", d2jScript),
+		filepath.Join("..", "..", "tools", "dex-tools-v2.4", d2jScript),
 	)
 	if _, err := os.Stat(d2j); err != nil {
 		return "", resolved, fmt.Errorf("dex2jar translator not found at %s", d2j)
 	}
 
-	tmpJar := cachedJar + ".tmp"
-	_ = os.Remove(tmpJar)
-	cmd := exec.Command("cmd", "/C", d2j, "-f", "-o", tmpJar, resolved)
-	out, convErr := cmd.CombinedOutput()
+	// Run dex2jar inside an OS-isolated worker workspace with memory/process/timeout limits.
+	ws, wsErr := worker_isolation.PrepareWorkspace(cacheDir)
+	if wsErr != nil {
+		return "", resolved, fmt.Errorf("prepare translator worker workspace: %w", wsErr)
+	}
+	defer func() { _ = ws.Cleanup() }()
+
+	tmpJar := filepath.Join(ws.TempDir, hashHex+"_classes.tmp.jar")
+	var cmd *exec.Cmd
+	if runtime.GOOS == "windows" {
+		cmd = exec.Command("cmd", "/C", d2j, "-f", "-o", tmpJar, resolved)
+	} else {
+		cmd = exec.Command("sh", d2j, "-f", "-o", tmpJar, resolved)
+	}
+	var outBuf strings.Builder
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &outBuf
+
+	limits := worker_isolation.DefaultTranslatorLimits()
+	h, isoErr := worker_isolation.StartIsolated(cmd, ws.WorkerID, ws, limits)
+	if isoErr != nil {
+		return "", resolved, fmt.Errorf("start isolated dex2jar worker: %w", isoErr)
+	}
+	waitDone := make(chan error, 1)
+	go func() { waitDone <- cmd.Wait() }()
+	var convErr error
+	select {
+	case convErr = <-waitDone:
+	case <-time.After(limits.ExecutionTimeout):
+		_ = h.Close()
+		convErr = fmt.Errorf("dex2jar translation timed out after %v", limits.ExecutionTimeout)
+		<-waitDone
+	}
+	_ = h.Close()
+
 	if convErr != nil {
-		_ = os.Remove(tmpJar)
-		return "", resolved, fmt.Errorf("dex2jar conversion failed for %s: %v (%s)", filepath.Base(resolved), convErr, strings.TrimSpace(string(out)))
+		return "", resolved, fmt.Errorf("dex2jar conversion failed for %s: %v (%s)", filepath.Base(resolved), convErr, strings.TrimSpace(outBuf.String()))
 	}
 	if st, err := os.Stat(tmpJar); err != nil || st.Size() == 0 {
-		_ = os.Remove(tmpJar)
 		return "", resolved, fmt.Errorf("dex2jar produced empty output for %s", filepath.Base(resolved))
 	}
+	if _, valJarErr := archive.ValidateArchive(tmpJar, archive.DefaultLimits()); valJarErr != nil {
+		return "", resolved, fmt.Errorf("translated JAR failed security validation: %w", valJarErr)
+	}
 	if err := os.Rename(tmpJar, cachedJar); err != nil {
-		return tmpJar, resolved, nil
+		// Cross-device fallback: copy into cache if rename fails
+		if data, rErr := os.ReadFile(tmpJar); rErr == nil {
+			if wErr := os.WriteFile(cachedJar, data, 0644); wErr == nil {
+				return cachedJar, resolved, nil
+			}
+		}
+		return "", resolved, fmt.Errorf("persist translated jar: %w", err)
 	}
 	return cachedJar, resolved, nil
 }
@@ -195,12 +340,14 @@ func (b *LiveHeadlessBridge) Launch(apkOrJarPath, activity string) (*LaunchResul
 	frameworkJar := resolvePath(
 		filepath.Join("engine", "runtime", "nano-framework.jar"),
 		filepath.Join("..", "runtime", "nano-framework.jar"),
-		`d:\code\Main_projects\android_mcp\engine\runtime\nano-framework.jar`,
 	)
 	androidJar := resolvePath(
 		filepath.Join("engine", "runtime", "android.jar"),
 		filepath.Join("..", "runtime", "android.jar"),
-		`d:\code\Main_projects\android_mcp\engine\runtime\android.jar`,
+	)
+	sqliteJar := resolvePath(
+		filepath.Join("tools", "libs", "sqlite-jdbc-3.54.1.0.jar"),
+		filepath.Join("..", "..", "tools", "libs", "sqlite-jdbc-3.54.1.0.jar"),
 	)
 	if _, err := os.Stat(frameworkJar); err != nil {
 		return nil, fmt.Errorf("nano-framework.jar missing at %s", frameworkJar)
@@ -208,9 +355,38 @@ func (b *LiveHeadlessBridge) Launch(apkOrJarPath, activity string) (*LaunchResul
 	if _, err := os.Stat(androidJar); err != nil {
 		return nil, fmt.Errorf("android.jar missing at %s", androidJar)
 	}
-	cp := fmt.Sprintf("%s;%s", frameworkJar, androidJar)
+	cpParts := []string{frameworkJar, androidJar}
+	if _, err := os.Stat(sqliteJar); err == nil {
+		cpParts = append(cpParts, sqliteJar)
+	}
+	cp := strings.Join(cpParts, string(os.PathListSeparator))
 
-	args := []string{"-cp", cp, "nanoandroid.host.HeadlessAppHost", jarPath, activity}
+	ws, wsErr := worker_isolation.PrepareWorkspace(resolveCacheDir())
+	if wsErr != nil {
+		return nil, fmt.Errorf("prepare isolated worker workspace: %w", wsErr)
+	}
+
+	sandboxRoot := filepath.Join(resolveCacheDir(), "sandbox")
+	if strings.TrimSpace(b.SandboxRootOverride) != "" {
+		sandboxRoot = b.SandboxRootOverride
+		_ = os.MkdirAll(sandboxRoot, 0750)
+	} else if strings.EqualFold(strings.TrimSpace(os.Getenv("NANO_ISOLATION_PROFILE")), "hostile") {
+		sandboxRoot = ws.SandboxDir
+	}
+
+	args := []string{
+		"-Xmx768m",
+		"-Dfile.encoding=UTF-8",
+		"-Dsun.stdout.encoding=UTF-8",
+		"-Dsun.stderr.encoding=UTF-8",
+		"--enable-native-access=ALL-UNNAMED",
+		"-Djava.io.tmpdir=" + ws.TempDir,
+		"-Dnano.sandbox.dir=" + sandboxRoot,
+		"-cp", cp,
+		"nanoandroid.host.HeadlessAppHost",
+		jarPath,
+		activity,
+	}
 	if apkPath != "" {
 		args = append(args, apkPath)
 	}
@@ -218,19 +394,26 @@ func (b *LiveHeadlessBridge) Launch(apkOrJarPath, activity string) (*LaunchResul
 	cmd := exec.Command("java", args...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
+		_ = ws.Cleanup()
 		return nil, err
 	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		_ = ws.Cleanup()
 		return nil, err
 	}
 	cmd.Stderr = os.Stderr
 
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("failed to start HeadlessAppHost JVM: %w", err)
+	limits := worker_isolation.DefaultJVMLimits()
+	handle, isoErr := worker_isolation.StartIsolated(cmd, ws.WorkerID, ws, limits)
+	if isoErr != nil {
+		_ = ws.Cleanup()
+		return nil, fmt.Errorf("failed to start isolated HeadlessAppHost JVM: %w", isoErr)
 	}
 
 	b.cmd = cmd
+	b.workerHandle = handle
+	b.workerWorkspace = ws
 	b.stdin = stdin
 	b.reader = bufio.NewReader(stdout)
 	b.active = true
@@ -244,19 +427,24 @@ func (b *LiveHeadlessBridge) Launch(apkOrJarPath, activity string) (*LaunchResul
 	}
 
 	var resp struct {
-		Status         string   `json:"status"`
-		Error          string   `json:"error"`
-		Package        string   `json:"package"`
-		Activity       string   `json:"activity"`
-		State          string   `json:"state"`
-		StartupMs      int64    `json:"startup_ms"`
-		AppLabel       string   `json:"app_label"`
-		MinSDK         int      `json:"min_sdk"`
-		TargetSDK      int      `json:"target_sdk"`
-		Activities     []string `json:"activities"`
-		NativeLibs     int      `json:"native_libs"`
-		Warnings       []string `json:"warnings"`
-		ExceptionTrace string   `json:"exception_trace"`
+		Status                string   `json:"status"`
+		ResultStatus          string   `json:"result_status"`
+		DegradedHeuristic     bool     `json:"degraded_heuristic"`
+		TransformationCount   int      `json:"transformation_count"`
+		CompatFaultCount      int      `json:"compat_fault_count"`
+		KotlinMetadataClasses int      `json:"kotlin_metadata_classes"`
+		Error                 string   `json:"error"`
+		Package               string   `json:"package"`
+		Activity              string   `json:"activity"`
+		State                 string   `json:"state"`
+		StartupMs             int64    `json:"startup_ms"`
+		AppLabel              string   `json:"app_label"`
+		MinSDK                int      `json:"min_sdk"`
+		TargetSDK             int      `json:"target_sdk"`
+		Activities            []string `json:"activities"`
+		NativeLibs            int      `json:"native_libs"`
+		Warnings              []string `json:"warnings"`
+		ExceptionTrace        string   `json:"exception_trace"`
 	}
 	if err := json.Unmarshal([]byte(line), &resp); err != nil {
 		b.closeInternal()
@@ -268,24 +456,39 @@ func (b *LiveHeadlessBridge) Launch(apkOrJarPath, activity string) (*LaunchResul
 		pid = cmd.Process.Pid
 	}
 
+	var compatRec *registry.ExecutionRecommendation
+	if apkPath != "" && strings.HasSuffix(strings.ToLower(apkPath), ".apk") {
+		eng := ingest.NewEngine(filepath.Join(resolveCacheDir(), "apk_intel"), "")
+		if rep, ingestErr := eng.Analyze(apkPath); ingestErr == nil && rep != nil {
+			rec := registry.EvaluateAPK(rep, "auto")
+			compatRec = &rec
+		}
+	}
+
 	return &LaunchResult{
-		AppID:            resp.Package,
-		Activity:         resp.Activity,
-		PID:              pid,
-		Status:           resp.Status,
-		SandboxID:        fmt.Sprintf("nano-jvm-%d", pid),
-		VirtualTimeMs:    0,
-		LaunchDurationMs: resp.StartupMs,
-		ApkPath:          apkPath,
-		AppLabel:         resp.AppLabel,
-		MinSDK:           resp.MinSDK,
-		TargetSDK:        resp.TargetSDK,
-		Activities:       resp.Activities,
-		NativeLibs:       resp.NativeLibs,
-		Warnings:         resp.Warnings,
-		ExceptionTrace:   resp.ExceptionTrace,
-		Error:            resp.Error,
-		ExecutionMode:    "nano_jvm",
+		AppID:                 resp.Package,
+		Activity:              resp.Activity,
+		PID:                   pid,
+		Status:                resp.Status,
+		SandboxID:             fmt.Sprintf("nano-jvm-%d", pid),
+		VirtualTimeMs:         0,
+		LaunchDurationMs:      resp.StartupMs,
+		ApkPath:               apkPath,
+		AppLabel:              resp.AppLabel,
+		MinSDK:                resp.MinSDK,
+		TargetSDK:             resp.TargetSDK,
+		Activities:            resp.Activities,
+		NativeLibs:            resp.NativeLibs,
+		Warnings:              resp.Warnings,
+		ExceptionTrace:        resp.ExceptionTrace,
+		Error:                 resp.Error,
+		ExecutionMode:         "nano_jvm",
+		ResultStatus:          resp.ResultStatus,
+		DegradedHeuristic:     resp.DegradedHeuristic,
+		TransformationCount:   resp.TransformationCount,
+		CompatFaultCount:      resp.CompatFaultCount,
+		KotlinMetadataClasses: resp.KotlinMetadataClasses,
+		Compatibility:         compatRec,
 	}, nil
 }
 
@@ -428,21 +631,75 @@ func (b *LiveHeadlessBridge) StepTime(deltaMs int64) (*StepResult, error) {
 	}
 
 	var resp struct {
-		Status   string `json:"status"`
-		DeltaMs  int64  `json:"delta_ms"`
-		Executed int    `json:"executed"`
-		UptimeMs int64  `json:"uptime_ms"`
+		Status          string `json:"status"`
+		DeltaMs         int64  `json:"delta_ms"`
+		ProcessedTasks  int    `json:"processed_tasks"`
+		VirtualUptimeMs int64  `json:"virtual_uptime_ms"`
 	}
 	if err := json.Unmarshal([]byte(line), &resp); err != nil {
 		return nil, err
 	}
 
 	return &StepResult{
-		VirtualTimeMs: resp.UptimeMs,
+		VirtualTimeMs: resp.VirtualUptimeMs,
 		SteppedMs:     deltaMs,
-		TasksExecuted: resp.Executed,
+		TasksExecuted: resp.ProcessedTasks,
 		IsIdle:        true,
 	}, nil
+}
+
+// SetProfile configures the virtual viewport width/height inside HeadlessAppHost.
+func (b *LiveHeadlessBridge) SetProfile(widthPx, heightPx int) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.active {
+		return fmt.Errorf("headless bridge not active")
+	}
+	if _, err := fmt.Fprintf(b.stdin, "SET_PROFILE %d %d\n", widthPx, heightPx); err != nil {
+		return err
+	}
+	line, err := b.readJsonLine()
+	if err != nil {
+		return err
+	}
+	var resp struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(line), &resp); err != nil {
+		return err
+	}
+	if resp.Status != "ok" {
+		return fmt.Errorf("set profile error: %s", resp.Error)
+	}
+	return nil
+}
+
+// SimulateProcessDeath triggers onPause -> onSaveInstanceState -> onStop -> onDestroy and restores fresh Activity state.
+func (b *LiveHeadlessBridge) SimulateProcessDeath() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.active {
+		return fmt.Errorf("headless bridge not active")
+	}
+	if _, err := fmt.Fprintln(b.stdin, "SIMULATE_PROCESS_DEATH"); err != nil {
+		return err
+	}
+	line, err := b.readJsonLine()
+	if err != nil {
+		return err
+	}
+	var resp struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+	}
+	if err := json.Unmarshal([]byte(line), &resp); err != nil {
+		return err
+	}
+	if resp.Status != "ok" {
+		return fmt.Errorf("process death simulation error: %s", resp.Error)
+	}
+	return nil
 }
 
 // RenderScreen renders the real Java2D 1080x2400 framebuffer PNG from HeadlessAppHost.
@@ -509,6 +766,96 @@ func (b *LiveHeadlessBridge) InspectRuntime() (*RuntimeMetrics, error) {
 	return &resp.RuntimeMetrics, nil
 }
 
+// InspectTimeline retrieves the monotonic correlated forensic timeline recorded during the active session.
+func (b *LiveHeadlessBridge) InspectTimeline() ([]HostTimelineEvent, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.active {
+		return nil, fmt.Errorf("headless bridge not active")
+	}
+	if _, err := fmt.Fprintln(b.stdin, "TIMELINE"); err != nil {
+		return nil, err
+	}
+	line, err := b.readJsonLine()
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Status string              `json:"status"`
+		Error  string              `json:"error"`
+		Events []HostTimelineEvent `json:"events"`
+	}
+	if err := json.Unmarshal([]byte(line), &resp); err != nil {
+		return nil, err
+	}
+	if resp.Status != "ok" {
+		return nil, fmt.Errorf("timeline error: %s", resp.Error)
+	}
+	return resp.Events, nil
+}
+
+// InspectThreads returns live JVM ThreadMXBean thread states, deadlock detection, and Looper queue depth.
+func (b *LiveHeadlessBridge) InspectThreads() (*HostThreadReport, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.active {
+		return nil, fmt.Errorf("headless bridge not active")
+	}
+	if _, err := fmt.Fprintln(b.stdin, "THREADS"); err != nil {
+		return nil, err
+	}
+	line, err := b.readJsonLine()
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+		HostThreadReport
+	}
+	if err := json.Unmarshal([]byte(line), &resp); err != nil {
+		return nil, err
+	}
+	if resp.Status != "ok" {
+		return nil, fmt.Errorf("threads error: %s", resp.Error)
+	}
+	return &resp.HostThreadReport, nil
+}
+
+// InspectStorage returns live active SQLite table row counts and SharedPreferences entries.
+func (b *LiveHeadlessBridge) InspectStorage() (*HostStorageSnapshot, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if !b.active {
+		return nil, fmt.Errorf("headless bridge not active")
+	}
+	if _, err := fmt.Fprintln(b.stdin, "INSPECT_STORAGE"); err != nil {
+		return nil, err
+	}
+	line, err := b.readJsonLine()
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Status string `json:"status"`
+		Error  string `json:"error"`
+		HostStorageSnapshot
+	}
+	if err := json.Unmarshal([]byte(line), &resp); err != nil {
+		return nil, err
+	}
+	if resp.Status != "ok" {
+		return nil, fmt.Errorf("inspect storage error: %s", resp.Error)
+	}
+	if resp.SQLiteTables == nil {
+		resp.SQLiteTables = map[string]string{}
+	}
+	if resp.Preferences == nil {
+		resp.Preferences = map[string]string{}
+	}
+	return &resp.HostStorageSnapshot, nil
+}
+
 // ListLayouts lists every compiled AXML layout entry found in the loaded APK's resources.arsc.
 func (b *LiveHeadlessBridge) ListLayouts() ([]LayoutEntry, error) {
 	b.mu.Lock()
@@ -565,24 +912,39 @@ func (b *LiveHeadlessBridge) PreviewLayout(nameOrId string) (*LayoutPreviewResul
 	return &resp, nil
 }
 
-// StageFile registers a host media/document file into the staged_files sandbox for Android picker intents.
+// StageFile registers a contained workspace media/document file into the staged_files sandbox for Android picker intents.
 func (b *LiveHeadlessBridge) StageFile(hostPath string) (*StagedFileInfo, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	abs, err := filepath.Abs(hostPath)
-	if err != nil {
-		abs = hostPath
+	if err := pathcontainment.CheckPathSyntax(hostPath); err != nil {
+		return nil, fmt.Errorf("unsafe stage_file path: %w", err)
 	}
-	st, statErr := os.Stat(abs)
+	allowedRoots := []string{
+		filepath.Join(resolveCacheDir(), "staged_files"),
+		filepath.Join(resolveCacheDir(), "uploads"),
+		resolveCacheDir(),
+		resolvePath("fixtures"),
+	}
+	resolvedSrc, err := pathcontainment.ResolveExistingContained(hostPath, allowedRoots, nil)
+	if err != nil {
+		return nil, fmt.Errorf("staged file access denied: %w", err)
+	}
+	st, statErr := os.Stat(resolvedSrc)
 	if statErr != nil || st.IsDir() {
 		return nil, fmt.Errorf("staged file not found: %s", hostPath)
 	}
 	stagedDir := filepath.Join(resolveCacheDir(), "staged_files")
-	_ = os.MkdirAll(stagedDir, 0755)
-	dst := filepath.Join(stagedDir, filepath.Base(abs))
-	if !strings.EqualFold(abs, dst) {
-		srcF, err := os.Open(abs)
+	safeName, sErr := pathcontainment.SanitizeFilename(filepath.Base(resolvedSrc))
+	if sErr != nil {
+		return nil, sErr
+	}
+	dst, wErr := pathcontainment.ResolveWriteContained(stagedDir, safeName, nil)
+	if wErr != nil {
+		return nil, wErr
+	}
+	if !strings.EqualFold(resolvedSrc, dst) {
+		srcF, err := os.Open(resolvedSrc)
 		if err != nil {
 			return nil, err
 		}
@@ -733,10 +1095,22 @@ func (b *LiveHeadlessBridge) closeInternal() {
 		select {
 		case <-done:
 		case <-time.After(400 * time.Millisecond):
-			_ = b.cmd.Process.Kill()
+			if b.workerHandle != nil {
+				_ = b.workerHandle.Close()
+			} else {
+				_ = b.cmd.Process.Kill()
+			}
 			<-done
 		}
 		b.cmd = nil
+	}
+	if b.workerHandle != nil {
+		_ = b.workerHandle.Close()
+		b.workerHandle = nil
+	}
+	if b.workerWorkspace != nil {
+		_ = b.workerWorkspace.Cleanup()
+		b.workerWorkspace = nil
 	}
 	b.reader = nil
 	b.active = false

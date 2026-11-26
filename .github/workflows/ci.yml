@@ -7,8 +7,12 @@ on:
     branches: [ main ]
 
 jobs:
-  go-tests-and-build:
-    runs-on: ubuntu-latest
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest ]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -18,16 +22,98 @@ jobs:
         with:
           go-version-file: go.work
 
-      - name: Run Go unit and integration tests
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Verify pinned toolchain, rebuild framework & run JUnit 5 (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
         run: |
-          for mod in engine/ast_input engine/mcp_compiler engine/profiler_media engine/render engine/runtime droidforge-mcp; do
-            echo "=== Testing $mod ==="
-            (cd "$mod" && go test -count=1 ./...)
+          chmod +x scripts/verify_toolchain.sh engine/runtime/rebuild_nano_framework.sh
+          ./scripts/verify_toolchain.sh
+          ./engine/runtime/rebuild_nano_framework.sh
+          mkdir -p build/test-classes
+          javac -cp "engine/runtime/nano-framework.jar:engine/runtime/android.jar:tools/libs/sqlite-jdbc-3.54.1.0.jar:tools/libs/junit-platform-console-standalone-1.11.4.jar" \
+            -d build/test-classes \
+            tests/security/java/Phase0SecurityAndSQLiteTest.java \
+            tests/conformance/java/Phase1RuntimeConformanceTest.java \
+            tests/conformance/java/Phase3TelemetryAndCompatDbTest.java
+          java --enable-native-access=ALL-UNNAMED -jar tools/libs/junit-platform-console-standalone-1.11.4.jar \
+            execute --class-path "build/test-classes:engine/runtime/nano-framework.jar:engine/runtime/android.jar:tools/libs/sqlite-jdbc-3.54.1.0.jar" \
+            --scan-class-path
+
+      - name: Verify pinned toolchain, rebuild framework & run JUnit 5 (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          .\scripts\verify_toolchain.ps1
+          .\engine\runtime\rebuild_nano_framework.ps1
+          if (Test-Path build\test-classes) { Remove-Item -Recurse -Force build\test-classes }
+          New-Item -ItemType Directory -Force build\test-classes | Out-Null
+          javac -cp "engine\runtime\nano-framework.jar;engine\runtime\android.jar;tools\libs\sqlite-jdbc-3.54.1.0.jar;tools\libs\junit-platform-console-standalone-1.11.4.jar" `
+            -d build\test-classes `
+            tests\security\java\Phase0SecurityAndSQLiteTest.java `
+            tests\conformance\java\Phase1RuntimeConformanceTest.java `
+            tests\conformance\java\Phase3TelemetryAndCompatDbTest.java
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          java --enable-native-access=ALL-UNNAMED -jar tools\libs\junit-platform-console-standalone-1.11.4.jar `
+            execute --class-path "build\test-classes;engine\runtime\nano-framework.jar;engine\runtime\android.jar;tools\libs\sqlite-jdbc-3.54.1.0.jar" `
+            --scan-class-path
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run Go tests (-race) and go vet across all modules (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          for mod in . adapters engine/api engine/apk engine/ast_input engine/backend engine/compatibility engine/intelligence engine/mcp_compiler engine/media engine/network engine/plugins engine/profiler engine/profiler_media engine/render engine/reporting engine/runtime engine/security engine/testing engine/ui plugins droidforge-mcp; do
+            echo "=== Testing & Vetting $mod ==="
+            (cd "$mod" && go test -race -count=1 ./... && go vet ./...)
           done
+          mkdir -p bin droidforge-mcp/bin
+          go build -trimpath -o bin/nano ./cmd/nano/main.go
+          go build -trimpath -o bin/nano-studio ./cmd/nano-studio/main.go
+          go build -trimpath -o bin/nano-android-mcp ./cmd/nano-mcp/main.go
+          (cd droidforge-mcp && go build -trimpath -ldflags="-s -w" -o bin/droidforge-mcp ./cmd/droidforge-mcp)
 
-      - name: Verify Go vet and binary builds
+      - name: Run Go tests (-race), go vet, binary builds & live runtime (Windows)
+        if: runner.os == 'Windows'
+        shell: powershell
         run: |
-          go vet ./cmd/nano-studio ./engine/ast_input/... ./engine/mcp_compiler/... ./engine/profiler_media/... ./engine/render/... ./engine/runtime/...
-          go build -o bin/nano-studio ./cmd/nano-studio/main.go
-          go build -o bin/nano-android-mcp ./engine/mcp_compiler/cmd
+          $mods = @(".", "adapters", "engine/api", "engine/apk", "engine/ast_input", "engine/backend", "engine/compatibility", "engine/intelligence", "engine/mcp_compiler", "engine/media", "engine/network", "engine/plugins", "engine/profiler", "engine/profiler_media", "engine/render", "engine/reporting", "engine/runtime", "engine/security", "engine/testing", "engine/ui", "plugins", "droidforge-mcp")
+          foreach ($m in $mods) {
+            Write-Host "=== Testing & Vetting $m ==="
+            Push-Location $m
+            go test -race -count=1 ./...
+            if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
+            go vet ./...
+            if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }
+            Pop-Location
+          }
+          New-Item -ItemType Directory -Force bin, droidforge-mcp\bin | Out-Null
+          go build -trimpath -o bin/nano.exe ./cmd/nano/main.go
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go build -trimpath -o bin/nano-studio.exe ./cmd/nano-studio/main.go
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go build -trimpath -o bin/nano-android-mcp.exe ./cmd/nano-mcp/main.go
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Push-Location droidforge-mcp; go build -trimpath -ldflags="-s -w" -o bin/droidforge-mcp.exe ./cmd/droidforge-mcp; if ($LASTEXITCODE -ne 0) { Pop-Location; exit $LASTEXITCODE }; Pop-Location
+          go run ./cmd/live-runtime-verify/main.go
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+  python-sidecar-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Python sidecar unit tests
+        working-directory: droidforge-mcp/sidecar-python
+        run: python -m unittest -v test_sidecar.py

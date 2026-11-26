@@ -30,6 +30,9 @@ type Server struct {
 	inFlightMu sync.Mutex
 	inFlight   map[string]context.CancelFunc
 
+	closersMu sync.Mutex
+	closers   []io.Closer
+
 	writerMu sync.Mutex
 }
 
@@ -140,6 +143,33 @@ func (s *Server) ListHandlers() []types.ToolDefinition {
 		defs = append(defs, h.Definition())
 	}
 	return defs
+}
+
+// RegisterCloser registers a resource closer to be invoked when Server.Close runs.
+func (s *Server) RegisterCloser(c io.Closer) {
+	if c == nil {
+		return
+	}
+	s.closersMu.Lock()
+	defer s.closersMu.Unlock()
+	s.closers = append(s.closers, c)
+}
+
+// Close tears down registered subsystem resources (such as vision streams and sidecars).
+func (s *Server) Close() error {
+	s.closersMu.Lock()
+	closers := make([]io.Closer, len(s.closers))
+	copy(closers, s.closers)
+	s.closers = nil
+	s.closersMu.Unlock()
+
+	var firstErr error
+	for i := len(closers) - 1; i >= 0; i-- {
+		if err := closers[i].Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 // Serve starts the MCP server over standard input and output.

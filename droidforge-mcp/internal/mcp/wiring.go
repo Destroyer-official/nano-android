@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"fmt"
 	"os"
 	"time"
 
@@ -60,14 +61,24 @@ func WireProductionEnginesWithOptions(
 	deviceMgr := device.NewDeviceManager(deviceOpts...)
 
 	// 2. Vision Backend
+	redactStatus := cfg.Observation.RedactStatusBarOnPhysical && opts.AllowPhysical
+	statusHeight := 0
+	if redactStatus {
+		statusHeight = 72
+	}
 	visionConfig := vision.ManagerConfig{
-		ADBRunner:        deviceMgr.ExecADB,
-		IdleTimeout:      10 * time.Minute,
-		CheckInterval:    30 * time.Second,
-		DefaultMaxHeight: cfg.Observation.ScreenshotMaxHeight,
-		DefaultQuality:   cfg.Observation.ScreenshotQuality,
+		ScrcpyJarPath:     os.Getenv("SCRCPY_SERVER_PATH"),
+		FFmpegPath:        os.Getenv("FFMPEG_PATH"),
+		ADBRunner:         deviceMgr.ExecADB,
+		IdleTimeout:       10 * time.Minute,
+		CheckInterval:     30 * time.Second,
+		DefaultMaxHeight:  cfg.Observation.ScreenshotMaxHeight,
+		DefaultQuality:    cfg.Observation.ScreenshotQuality,
+		RedactStatusBar:   redactStatus,
+		StatusBarHeightPx: statusHeight,
 	}
 	visionBackend := vision.NewManager(visionConfig)
+	srv.RegisterCloser(visionBackend)
 
 	// 3. UI Tree Service & Tools (#9, #10, #11, #12, #13)
 	uiTreeService := uitree.NewService(deviceMgr, visionBackend, guard, &cfg.Observation)
@@ -98,9 +109,22 @@ func WireProductionEnginesWithOptions(
 	srv.Register(device.NewDeviceResetStateTool(deviceMgr))
 	srv.Register(device.NewAppInstallAndLaunchTool(deviceMgr))
 
-	// 8. Governance & Approval Tool (#26)
-	srv.Register(policy.NewApprovalHandler(emulatorOnly, os.Stdin))
+	// 8. Governance & Approval Tool (#26) — never attach os.Stdin because stdio MCP owns stdin.
+	srv.Register(policy.NewApprovalHandler(emulatorOnly, nil))
 
-	// 9. Guarantee 100% tool completeness via canonical stubs fallback
-	RegisterAllStubs(srv)
+	// 9. Fail loudly if any canonical tool failed to wire rather than silently masking with a stub.
+	if missing := MissingCanonicalTools(srv); len(missing) > 0 {
+		panic(fmt.Sprintf("droidforge-mcp: missing production handlers for canonical tools: %v", missing))
+	}
+}
+
+// MissingCanonicalTools returns the names of canonical tools not yet registered on srv.
+func MissingCanonicalTools(srv *Server) []string {
+	var missing []string
+	for _, def := range AllCanonicalToolDefinitions() {
+		if _, exists := srv.GetHandler(def.Name); !exists {
+			missing = append(missing, def.Name)
+		}
+	}
+	return missing
 }

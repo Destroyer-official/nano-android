@@ -938,3 +938,51 @@ func BenchmarkMaestroCompile(b *testing.B) {
 		}
 	}
 }
+
+func TestSecurity_SanitizeAndPathValidation(t *testing.T) {
+	coord := NewMockCoordinator()
+	compiler := NewMaestroCompiler("com.prism.v")
+	reg := NewToolRegistry(coord, compiler)
+	ctx := context.Background()
+
+	// 1. Reject bad apk_path extension and null bytes
+	if res, _ := reg.Call(ctx, "nano_launch_app", map[string]any{"apk_path": "/etc/passwd"}); res == nil || !res.IsError {
+		t.Fatalf("expected error for non-apk/jar apk_path, got %+v", res)
+	}
+	if res, _ := reg.Call(ctx, "nano_launch_app", map[string]any{"apk_path": "bad\x00.apk"}); res == nil || !res.IsError {
+		t.Fatalf("expected error for null byte in apk_path, got %+v", res)
+	}
+
+	// 2. Reject relative path traversal and non-yaml output_path in nano_freeze_test
+	if res, _ := reg.Call(ctx, "nano_freeze_test", map[string]any{"output_path": "../../evil.yaml"}); res == nil || !res.IsError {
+		t.Fatalf("expected error for relative path traversal in output_path, got %+v", res)
+	}
+	if res, _ := reg.Call(ctx, "nano_freeze_test", map[string]any{"output_path": "flow.sh"}); res == nil || !res.IsError {
+		t.Fatalf("expected error for non-yaml output_path, got %+v", res)
+	}
+
+	// 3. Verify bidi/zero-width sanitization
+	obs := &ObserveResult{
+		ActiveDialog: "Hello\u202EWorld\u200B!",
+		Toast:        "\uFEFFToast\u2066Msg",
+		VisibleTexts: []string{"Click\u200CMe"},
+		AST: &ASTNode{
+			ID:                 "n1",
+			Text:               "Btn\u202AOk",
+			ContentDescription: "Desc\u200DHere",
+		},
+	}
+	sanitizeObserveResult(obs)
+	if obs.ActiveDialog != "HelloWorld!" {
+		t.Errorf("expected bidi/zwc stripped from ActiveDialog, got %q", obs.ActiveDialog)
+	}
+	if obs.Toast != "ToastMsg" {
+		t.Errorf("expected bidi/zwc stripped from Toast, got %q", obs.Toast)
+	}
+	if obs.VisibleTexts[0] != "ClickMe" {
+		t.Errorf("expected zwc stripped from VisibleTexts, got %q", obs.VisibleTexts[0])
+	}
+	if obs.AST.Text != "BtnOk" || obs.AST.ContentDescription != "DescHere" {
+		t.Errorf("expected bidi/zwc stripped from AST node, got %q / %q", obs.AST.Text, obs.AST.ContentDescription)
+	}
+}

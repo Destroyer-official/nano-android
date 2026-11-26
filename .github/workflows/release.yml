@@ -1,0 +1,109 @@
+name: Release (Multi-OS Signed Binaries, SBOM & Compatibility DB)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  build-release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            runner: ubuntu-latest
+            ext: ""
+          - goos: linux
+            goarch: arm64
+            runner: ubuntu-latest
+            ext: ""
+          - goos: windows
+            goarch: amd64
+            runner: windows-latest
+            ext: ".exe"
+          - goos: windows
+            goarch: arm64
+            runner: windows-latest
+            ext: ".exe"
+          - goos: darwin
+            goarch: amd64
+            runner: macos-latest
+            ext: ""
+          - goos: darwin
+            goarch: arm64
+            runner: macos-latest
+            ext: ""
+
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.work
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Verify pinned toolchain
+        shell: bash
+        run: |
+          chmod +x scripts/verify_toolchain.sh || true
+          ./scripts/verify_toolchain.sh || true
+
+      - name: Cross-compile signed-ready binaries
+        shell: bash
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          OUTDIR="dist/nano-android-${GOOS}-${GOARCH}"
+          mkdir -p "$OUTDIR"
+          go build -trimpath -ldflags="-s -w" -o "$OUTDIR/nano${{ matrix.ext }}" ./cmd/nano/main.go
+          go build -trimpath -ldflags="-s -w" -o "$OUTDIR/nano-studio${{ matrix.ext }}" ./cmd/nano-studio/main.go
+          go build -trimpath -ldflags="-s -w" -o "$OUTDIR/nano-android-mcp${{ matrix.ext }}" ./cmd/nano-mcp/main.go
+          (cd droidforge-mcp && go build -trimpath -ldflags="-s -w" -o "../$OUTDIR/droidforge-mcp${{ matrix.ext }}" ./cmd/droidforge-mcp)
+
+      - name: Verify native installation via nano doctor, generate CycloneDX SBOM & export compatibility DB
+        if: (matrix.goos == 'linux' && matrix.goarch == 'amd64') || (matrix.goos == 'windows' && matrix.goarch == 'amd64') || (matrix.goos == 'darwin' && matrix.goarch == 'arm64')
+        shell: bash
+        run: |
+          OUTDIR="dist/nano-android-${{ matrix.goos }}-${{ matrix.goarch }}"
+          "$OUTDIR/nano${{ matrix.ext }}" doctor --json > "$OUTDIR/doctor_report.json"
+          "$OUTDIR/nano${{ matrix.ext }}" sbom --out="$OUTDIR/sbom.cdx.json"
+          "$OUTDIR/nano${{ matrix.ext }}" compatibility --db="cache/release_compat.db" --json > "$OUTDIR/community_compatibility_db.json" || true
+
+      - name: Generate SHA-256 CHECKSUMS
+        shell: bash
+        run: |
+          OUTDIR="dist/nano-android-${{ matrix.goos }}-${{ matrix.goarch }}"
+          (cd "$OUTDIR" && sha256sum * > CHECKSUMS.txt)
+
+      - name: Install Cosign & sign CHECKSUMS.txt (keyless OIDC)
+        uses: sigstore/cosign-installer@v3
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+
+      - name: Sign release bundle with Cosign
+        if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        run: |
+          OUTDIR="dist/nano-android-${{ matrix.goos }}-${{ matrix.goarch }}"
+          cosign sign-blob --yes --output-signature "$OUTDIR/CHECKSUMS.txt.sig" --output-certificate "$OUTDIR/CHECKSUMS.txt.pem" "$OUTDIR/CHECKSUMS.txt"
+
+      - name: Upload Release Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: nano-android-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/nano-android-${{ matrix.goos }}-${{ matrix.goarch }}/**

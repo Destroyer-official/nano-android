@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	mcp "nano_android/engine/mcp_compiler"
@@ -24,8 +25,11 @@ func main() {
 	fmt.Println("⚡ AUTONOMOUS ANDROID MICRO-RUNTIME: ZERO-OS PURE BYTECODE & VIEW EXECUTION")
 	fmt.Println("================================================================================")
 
-	apkPath := `C:\Users\des\OneDrive\Desktop\video_compression\release\prism-v-v1.2.3.apk`
-	jarPath := `d:\code\Main_projects\android_mcp\tools\prism-v.jar`
+	apkPath := os.Getenv("NANO_TEST_APK")
+	if apkPath == "" {
+		apkPath = filepath.Join("tools", "prism-v.jar")
+	}
+	jarPath := filepath.Join("tools", "prism-v.jar")
 
 	if _, err := os.Stat(apkPath); err != nil && func() bool { _, e := os.Stat(jarPath); return e != nil }() {
 		fmt.Printf("❌ Neither APK nor JAR found: %s\n", apkPath)

@@ -8,12 +8,28 @@ if (Test-Path $binDir) {
 }
 New-Item -ItemType Directory -Path $binDir -Force | Out-Null
 
+$asmVer = "9.11.1"
+$asmJars = @(
+    "tools/libs/asm-$asmVer.jar",
+    "tools/libs/asm-tree-$asmVer.jar",
+    "tools/libs/asm-analysis-$asmVer.jar",
+    "tools/libs/asm-commons-$asmVer.jar",
+    "tools/libs/asm-util-$asmVer.jar"
+)
+foreach ($j in $asmJars) {
+    if (-not (Test-Path $j)) {
+        Write-Error "Missing pinned ASM jar: $j"
+        exit 1
+    }
+}
+
 $files = Get-ChildItem -Path $srcDir -Filter "*.java" -Recurse | Select-Object -ExpandProperty FullName
 $sourcesFile = "engine/runtime/sources.txt"
 [System.IO.File]::WriteAllLines($sourcesFile, $files)
 
-Write-Host "Compiling $($files.Count) Java source files..."
-javac -cp "engine/runtime/android.jar;tools/dex-tools-v2.4/lib/asm-9.5.jar;tools/dex-tools-v2.4/lib/asm-tree-9.5.jar;tools/dex-tools-v2.4/lib/asm-analysis-9.5.jar" -d $binDir "@$sourcesFile"
+$cp = (@("engine/runtime/android.jar", "tools/libs/sqlite-jdbc-3.54.1.0.jar") + $asmJars) -join ";"
+Write-Host "Compiling $($files.Count) Java source files against ASM $asmVer + sqlite-jdbc..."
+javac -cp $cp -d $binDir "@$sourcesFile"
 $rc = $LASTEXITCODE
 Remove-Item $sourcesFile -Force -ErrorAction SilentlyContinue
 
@@ -22,22 +38,20 @@ if ($rc -ne 0) {
     exit 1
 }
 
-$asmJar = (Resolve-Path "tools/dex-tools-v2.4/lib/asm-9.5.jar").Path
-$asmTreeJar = (Resolve-Path "tools/dex-tools-v2.4/lib/asm-tree-9.5.jar").Path
-$asmAnalysisJar = (Resolve-Path "tools/dex-tools-v2.4/lib/asm-analysis-9.5.jar").Path
-Write-Host "Extracting ASM from $asmJar, $asmTreeJar, and $asmAnalysisJar into $binDir..."
+Write-Host "Extracting ASM $asmVer into $binDir..."
+$resolvedJars = $asmJars | ForEach-Object { (Resolve-Path $_).Path }
 Push-Location $binDir
-jar xf $asmJar
-jar xf $asmTreeJar
-jar xf $asmAnalysisJar
+foreach ($rj in $resolvedJars) {
+    jar xf $rj
+}
 if (Test-Path "module-info.class") { Remove-Item "module-info.class" -Force }
 Pop-Location
 
 Write-Host "Packaging $jarFile..."
 jar cf $jarFile -C $binDir .
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "jar packaging failed! (Is another process locking $jarFile?)"
+    Write-Error "jar packaging failed!"
     exit 1
 }
 
-Write-Host "SUCCESS! $jarFile updated successfully."
+Write-Host "SUCCESS! $jarFile updated with ASM $asmVer."

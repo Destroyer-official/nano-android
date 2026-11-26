@@ -236,6 +236,30 @@ public class ContextWrapper extends Context {
     }
 
     @Override
+    public ComponentName startService(Intent service) {
+        return mBase != null ? mBase.startService(service) : super.startService(service);
+    }
+
+    @Override
+    public boolean stopService(Intent service) {
+        return mBase != null ? mBase.stopService(service) : super.stopService(service);
+    }
+
+    @Override
+    public boolean bindService(Intent service, ServiceConnection conn, int flags) {
+        return mBase != null ? mBase.bindService(service, conn, flags) : super.bindService(service, conn, flags);
+    }
+
+    @Override
+    public void unbindService(ServiceConnection conn) {
+        if (mBase != null) {
+            mBase.unbindService(conn);
+        } else {
+            super.unbindService(conn);
+        }
+    }
+
+    @Override
     public Drawable getDrawable(int id) {
         return mBase != null ? mBase.getDrawable(id) : super.getDrawable(id);
     }

@@ -210,7 +210,7 @@ func NewLRUFrameCache(capacity int) *LRUFrameCache {
 	}
 }
 
-// Get looks up a cached frame by its 64-bit visual hash.
+// Get looks up a cached frame by its 64-bit visual hash and returns an immutable copy.
 func (c *LRUFrameCache) Get(hash uint64) (*FrameCacheEntry, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -218,21 +218,25 @@ func (c *LRUFrameCache) Get(hash uint64) (*FrameCacheEntry, bool) {
 	if elem, ok := c.items[hash]; ok {
 		c.lruList.MoveToFront(elem)
 		entry := elem.Value.(*FrameCacheEntry)
-		return entry, true
+		copied := *entry
+		return &copied, true
 	}
 	return nil, false
 }
 
-// Put inserts or updates an entry in the LRU cache.
+// Put inserts or replaces an immutable entry in the LRU cache.
 func (c *LRUFrameCache) Put(hash uint64, webp []byte, uri string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	entry := &FrameCacheEntry{
+		Hash:      hash,
+		WebPData:  webp,
+		Base64URI: uri,
+	}
 	if elem, ok := c.items[hash]; ok {
 		c.lruList.MoveToFront(elem)
-		entry := elem.Value.(*FrameCacheEntry)
-		entry.WebPData = webp
-		entry.Base64URI = uri
+		elem.Value = entry
 		return
 	}
 
@@ -245,11 +249,6 @@ func (c *LRUFrameCache) Put(hash uint64, webp []byte, uri string) {
 		}
 	}
 
-	entry := &FrameCacheEntry{
-		Hash:      hash,
-		WebPData:  webp,
-		Base64URI: uri,
-	}
 	elem := c.lruList.PushFront(entry)
 	c.items[hash] = elem
 }

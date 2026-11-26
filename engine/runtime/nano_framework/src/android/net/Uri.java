@@ -1,7 +1,9 @@
 package android.net;
 
 import java.io.File;
+import java.io.IOException;
 import java.net.URI;
+import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -35,12 +37,35 @@ public class Uri implements android.os.Parcelable {
         String s = uri.toString();
         File reg = REGISTERED_FILES.get(s);
         if (reg != null && reg.exists()) return reg;
+
+        // Only allow direct path resolution if strictly contained inside sandbox or staged_files.
         String p = uri.getPath();
         if (p != null && !p.isEmpty()) {
-            File f = new File(p);
-            if (f.exists()) return f;
+            try {
+                File f = new File(p);
+                if (f.exists() && isWithinAllowedContentRoot(f)) {
+                    return f;
+                }
+            } catch (IOException ignored) {}
         }
         return reg;
+    }
+
+    public static boolean isWithinAllowedContentRoot(File f) throws IOException {
+        if (f == null) return false;
+        Path canonFile = f.getCanonicalFile().toPath().normalize();
+        String sandboxProp = System.getProperty("nano.sandbox.dir");
+        File sandboxRoot = (sandboxProp != null && !sandboxProp.trim().isEmpty())
+                ? new File(sandboxProp)
+                : new File("cache", "sandbox");
+        File stagedRoot = new File("cache", "staged_files");
+        if (canonFile.startsWith(sandboxRoot.getCanonicalFile().toPath().normalize())) {
+            return true;
+        }
+        if (stagedRoot.exists() && canonFile.startsWith(stagedRoot.getCanonicalFile().toPath().normalize())) {
+            return true;
+        }
+        return false;
     }
 
     public String getScheme() {

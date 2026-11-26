@@ -1,10 +1,26 @@
 go 1.27.4
 
 use (
+	.
+	./adapters
 	./droidforge-mcp
+	./engine/api
+	./engine/apk
 	./engine/ast_input
+	./engine/backend
+	./engine/compatibility
+	./engine/intelligence
 	./engine/mcp_compiler
+	./engine/media
+	./engine/network
+	./engine/plugins
+	./engine/profiler
 	./engine/profiler_media
 	./engine/render
+	./engine/reporting
 	./engine/runtime
+	./engine/security
+	./engine/testing
+	./engine/ui
+	./plugins
 )

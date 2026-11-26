@@ -1,0 +1,14 @@
+{
+  "fixture_name": "minimal_ref_app",
+  "expected_package": "com.example.nanoref",
+  "expected_min_sdk": 26,
+  "expected_target_sdk": 35,
+  "expected_recommended_backend": "nano_jvm",
+  "expected_result_statuses": [
+    "NANO_SIMULATION_PASS",
+    "BEHAVIORAL_DIFF",
+    "DEGRADED_HEURISTIC"
+  ],
+  "requires_static_dex_scan": true,
+  "requires_content_provider_before_application": true
+}

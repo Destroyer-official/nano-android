@@ -62,24 +62,50 @@ func RunDoctor(ctx context.Context, cfg *types.DroidForgeConfig) []CheckResult {
 	// 8. Check Android SDK Root
 	results = append(results, checkAndroidSDK())
 
+	// 9. Check FFmpeg (scrcpy H264 decoding & media verification)
+	results = append(results, checkFFmpeg(ctx))
+
+	// 10. Check Maestro CLI (Explore-to-Freeze regression runner)
+	results = append(results, checkMaestro(ctx))
+
+	// 11. Check APK Static Analysis Tools (aapt2 / apkanalyzer / jadx)
+	results = append(results, checkAPKTools())
+
+	// 12. Check Python Sidecar (Perfetto & media SSIM/VMAF analysis)
+	results = append(results, checkPythonSidecar(ctx))
+
 	return results
 }
 
 func checkADB(ctx context.Context) CheckResult {
 	adbPath, err := exec.LookPath("adb")
 	if err != nil {
-		// Try candidate locations
-		candidates := []string{
-			os.Getenv("ANDROID_HOME") + "/platform-tools/adb",
-			os.Getenv("ANDROID_SDK_ROOT") + "/platform-tools/adb",
-			"D:\\program_software\\Android_toolkit\\platform-tools\\adb.exe",
-			os.ExpandEnv("$LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe"),
+		adbBin := "adb"
+		if runtime.GOOS == "windows" {
+			adbBin = "adb.exe"
+		}
+		candidates := []string{}
+		for _, envVar := range []string{"ANDROID_HOME", "ANDROID_SDK_ROOT"} {
+			if root := strings.TrimSpace(os.Getenv(envVar)); root != "" {
+				candidates = append(candidates, filepath.Join(root, "platform-tools", adbBin))
+			}
+		}
+		if local := os.Getenv("LOCALAPPDATA"); local != "" {
+			candidates = append(candidates, filepath.Join(local, "Android", "Sdk", "platform-tools", adbBin))
+		}
+		if home, hErr := os.UserHomeDir(); hErr == nil {
+			candidates = append(candidates,
+				filepath.Join(home, "Android", "Sdk", "platform-tools", adbBin),
+				filepath.Join(home, "Library", "Android", "sdk", "platform-tools", adbBin),
+			)
 		}
 		for _, c := range candidates {
-			if _, statErr := os.Stat(c); statErr == nil {
-				adbPath = c
-				err = nil
-				break
+			if c != "" {
+				if _, statErr := os.Stat(c); statErr == nil {
+					adbPath = c
+					err = nil
+					break
+				}
 			}
 		}
 	}
@@ -319,7 +345,11 @@ func checkJava(ctx context.Context) CheckResult {
 	if err != nil {
 		jh := os.Getenv("JAVA_HOME")
 		if jh != "" {
-			c := filepath.Join(jh, "bin", "java.exe")
+			javaBin := "java"
+			if runtime.GOOS == "windows" {
+				javaBin = "java.exe"
+			}
+			c := filepath.Join(jh, "bin", javaBin)
 			if _, statErr := os.Stat(c); statErr == nil {
 				javaPath = c
 				err = nil
@@ -370,13 +400,21 @@ func checkAndroidSDK() CheckResult {
 		}
 	}
 
-	// Check common fallback locations
-	fallbacks := []string{
-		"D:\\program_software\\Android_toolkit",
-		os.ExpandEnv("$LOCALAPPDATA/Android/Sdk"),
-		os.ExpandEnv("$HOME/Android/Sdk"),
+	// Check common cross-platform fallback locations
+	var fallbacks []string
+	if local := os.Getenv("LOCALAPPDATA"); local != "" {
+		fallbacks = append(fallbacks, filepath.Join(local, "Android", "Sdk"))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		fallbacks = append(fallbacks,
+			filepath.Join(home, "Android", "Sdk"),
+			filepath.Join(home, "Library", "Android", "sdk"),
+		)
 	}
 	for _, fb := range fallbacks {
+		if fb == "" {
+			continue
+		}
 		if _, err := os.Stat(fb); err == nil {
 			return CheckResult{
 				Name:        "Android SDK Root",
@@ -393,6 +431,148 @@ func checkAndroidSDK() CheckResult {
 		Status:      StatusWarn,
 		Details:     "ANDROID_HOME / ANDROID_SDK_ROOT environment variable not set",
 		Remediation: "Set ANDROID_HOME pointing to your Android SDK installation",
+	}
+}
+
+func checkFFmpeg(ctx context.Context) CheckResult {
+	if env := strings.TrimSpace(os.Getenv("FFMPEG_PATH")); env != "" {
+		if _, err := os.Stat(env); err == nil {
+			return CheckResult{Name: "FFmpeg", Status: StatusOK, Path: env, Details: "Configured via FFMPEG_PATH"}
+		}
+	}
+	ffmpegBin := "ffmpeg"
+	if runtime.GOOS == "windows" {
+		ffmpegBin = "ffmpeg.exe"
+	}
+	candidates := []string{
+		filepath.Join("bin", ffmpegBin),
+		filepath.Join("droidforge-mcp", "bin", ffmpegBin),
+	}
+	if execPath, err := os.Executable(); err == nil {
+		execDir := filepath.Dir(execPath)
+		candidates = append([]string{
+			filepath.Join(execDir, "bin", ffmpegBin),
+			filepath.Join(execDir, ffmpegBin),
+		}, candidates...)
+	}
+	for _, c := range candidates {
+		if _, err := os.Stat(c); err == nil {
+			return CheckResult{Name: "FFmpeg", Status: StatusOK, Path: c, Details: "Bundled ffmpeg binary ready"}
+		}
+	}
+	if p, err := exec.LookPath("ffmpeg"); err == nil {
+		cmd := exec.CommandContext(ctx, p, "-version")
+		out, _ := cmd.CombinedOutput()
+		firstLine := strings.Split(strings.TrimSpace(string(out)), "\n")[0]
+		return CheckResult{Name: "FFmpeg", Status: StatusOK, Path: p, Version: firstLine}
+	}
+	return CheckResult{
+		Name:        "FFmpeg",
+		Status:      StatusWarn,
+		Details:     "ffmpeg not found in PATH or bin/",
+		Remediation: "Install ffmpeg or place binary at bin/ffmpeg(.exe) for scrcpy H.264 stream decoding and media verification",
+	}
+}
+
+func checkMaestro(ctx context.Context) CheckResult {
+	p, err := exec.LookPath("maestro")
+	if err != nil {
+		if home, hErr := os.UserHomeDir(); hErr == nil {
+			cand := filepath.Join(home, ".maestro", "bin", "maestro")
+			if runtime.GOOS == "windows" {
+				cand += ".bat"
+			}
+			if _, sErr := os.Stat(cand); sErr == nil {
+				p = cand
+				err = nil
+			}
+		}
+	}
+	if err != nil {
+		return CheckResult{
+			Name:        "Maestro CLI",
+			Status:      StatusWarn,
+			Details:     "maestro binary not found in PATH",
+			Remediation: "Install Maestro CLI (`curl -Ls https://get.maestro.mobile.dev | bash`) to run frozen YAML tests via test_run_maestro",
+		}
+	}
+	cmd := exec.CommandContext(ctx, p, "--version")
+	out, _ := cmd.CombinedOutput()
+	return CheckResult{
+		Name:    "Maestro CLI",
+		Status:  StatusOK,
+		Path:    p,
+		Version: strings.TrimSpace(string(out)),
+	}
+}
+
+func checkAPKTools() CheckResult {
+	found := []string{}
+	for _, tool := range []string{"aapt2", "apkanalyzer", "apksigner", "jadx"} {
+		if _, err := exec.LookPath(tool); err == nil {
+			found = append(found, tool)
+		}
+	}
+	if len(found) > 0 {
+		return CheckResult{
+			Name:    "APK Analysis Tools",
+			Status:  StatusOK,
+			Details: fmt.Sprintf("Available on PATH: %s (plus built-in pure-Go AXML/ELF fallback)", strings.Join(found, ", ")),
+		}
+	}
+	return CheckResult{
+		Name:        "APK Analysis Tools",
+		Status:      StatusWarn,
+		Details:     "aapt2/apkanalyzer/apksigner/jadx not found on PATH (built-in Go parser still active)",
+		Remediation: "Add Android SDK build-tools / cmdline-tools and jadx to PATH for full static inspection",
+	}
+}
+
+func checkPythonSidecar(ctx context.Context) CheckResult {
+	sidecarDir := strings.TrimSpace(os.Getenv("DROIDFORGE_SIDECAR_DIR"))
+	if sidecarDir == "" {
+		for _, c := range []string{"sidecar-python", filepath.Join("droidforge-mcp", "sidecar-python")} {
+			if _, err := os.Stat(filepath.Join(c, "df_analyze_trace.py")); err == nil {
+				sidecarDir = c
+				break
+			}
+		}
+	}
+	if sidecarDir == "" {
+		return CheckResult{
+			Name:        "Python Sidecar",
+			Status:      StatusWarn,
+			Details:     "sidecar-python directory not located relative to current directory",
+			Remediation: "Set DROIDFORGE_SIDECAR_DIR to droidforge-mcp/sidecar-python",
+		}
+	}
+	if uvPath, err := exec.LookPath("uv"); err == nil {
+		return CheckResult{
+			Name:    "Python Sidecar",
+			Status:  StatusOK,
+			Path:    uvPath,
+			Details: fmt.Sprintf("uv + sidecar scripts ready at %s", sidecarDir),
+		}
+	}
+	for _, py := range []string{"python3", "python"} {
+		if pyPath, err := exec.LookPath(py); err == nil {
+			cmd := exec.CommandContext(ctx, pyPath, "--version")
+			out, _ := cmd.CombinedOutput()
+			return CheckResult{
+				Name:        "Python Sidecar",
+				Status:      StatusOK,
+				Path:        pyPath,
+				Version:     strings.TrimSpace(string(out)),
+				Details:     fmt.Sprintf("Python sidecar scripts ready at %s", sidecarDir),
+				Remediation: "Optional: install `uv` for isolated sidecar dependency management",
+			}
+		}
+	}
+	return CheckResult{
+		Name:        "Python Sidecar",
+		Status:      StatusWarn,
+		Details:     "Neither uv nor python found on PATH",
+		Remediation: "Install uv or Python 3.11+ for Perfetto trace analysis and media quality verification",
 	}
 }
 

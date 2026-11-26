@@ -2,6 +2,8 @@ package policy
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -102,5 +104,42 @@ func TestApprovalHandler_Definition(t *testing.T) {
 	}
 	if def.RiskTier != types.RiskAPPROVALGATED {
 		t.Errorf("expected RiskAPPROVALGATED, got %v", def.RiskTier)
+	}
+}
+
+func TestApprovalHandler_ApprovalsFile_NoStdin(t *testing.T) {
+	tmpDir := t.TempDir()
+	approvalsPath := filepath.Join(tmpDir, "approvals.json")
+	if err := os.WriteFile(approvalsPath, []byte(`{"action-file-001":"APPROVED"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DROIDFORGE_APPROVALS_FILE", approvalsPath)
+
+	// nil reader must never fall back to os.Stdin, and must honor DROIDFORGE_APPROVALS_FILE
+	handler := NewApprovalHandler(false, nil)
+	res, err := handler.Execute(context.Background(), map[string]any{
+		"action_id":       "action-file-001",
+		"target_resource": "pixel-physical-01",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Data["status"] != "APPROVED" {
+		t.Errorf("expected APPROVED from file, got %v", res.Data["status"])
+	}
+	if res.Data["approver"] != "human:approvals-file" {
+		t.Errorf("expected human:approvals-file approver, got %v", res.Data["approver"])
+	}
+
+	// Unlisted action returns PENDING immediately without blocking on os.Stdin
+	resPending, err := handler.Execute(context.Background(), map[string]any{
+		"action_id":       "action-unlisted-002",
+		"target_resource": "pixel-physical-01",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resPending.Data["status"] != "PENDING" {
+		t.Errorf("expected PENDING, got %v", resPending.Data["status"])
 	}
 }

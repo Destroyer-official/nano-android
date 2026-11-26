@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,8 +35,17 @@ func main() {
 	fmt.Println("🚀 STARTING NANO-ANDROID FULL 5-MODULE END-TO-END INTEGRATION TEST")
 	fmt.Println("================================================================================")
 
-	binaryPath := filepath.Join(".", "bin", "nano-android.exe")
-	targetAPK := `C:\Users\des\OneDrive\Desktop\video_compression\release\prism-v-v1.2.3.apk`
+	binaryPath := filepath.Join(".", "bin", "nano-android-mcp")
+	if os.PathSeparator == '\\' {
+		binaryPath += ".exe"
+	}
+	if _, err := os.Stat(binaryPath); err != nil {
+		binaryPath = filepath.Join(".", "bin", "nano-android.exe")
+	}
+	targetAPK := os.Getenv("NANO_TEST_APK")
+	if targetAPK == "" {
+		targetAPK = filepath.Join("tools", "prism-v.jar")
+	}
 
 	if _, err := os.Stat(binaryPath); err != nil {
 		fmt.Printf("❌ Binary not found at %s: %v\n", binaryPath, err)

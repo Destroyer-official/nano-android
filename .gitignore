@@ -1,5 +1,6 @@
 # Compiled binaries, installers, and coverage artifacts
 bin/
+build/
 *.exe
 *.exe~
 *.dll

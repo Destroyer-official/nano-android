@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "api_count": 24,
+  "entries": [
+    {"api":"android.animation.ValueAnimator","level":"BEHAVIORAL_DIFF","since_api":26,"until_api":37,"fallback":"","notes":"Virtual Choreographer/clock progression"},
+    {"api":"android.app.Activity","level":"FULLY_IMPLEMENTED","since_api":26,"until_api":37,"fallback":"","notes":"Lifecycle, stack, results, savedInstanceState, recreate"},
+    {"api":"android.app.AlarmManager","level":"PARTIAL","since_api":26,"until_api":37,"fallback":"android_art","notes":"Deterministic virtual-clock AlarmManager scheduled via main Looper; cross-process PendingIntent alarms require ART"},
+    {"api":"android.app.Application","level":"FULLY_IMPLEMENTED","since_api":26,"until_api":37,"fallback":"","notes":"Full Application lifecycle, ActivityLifecycleCallbacks dispatch, and configuration/memory callbacks"},
+    {"api":"android.app.Service","level":"PARTIAL","since_api":26,"until_api":37,"fallback":"android_art","notes":"In-process started, bound, and foreground service lifecycle; cross-process AIDL/remote processes require ART"},
+    {"api":"android.content.BroadcastReceiver","level":"PARTIAL","since_api":26,"until_api":37,"fallback":"android_art","notes":"In-process dynamic/manifest broadcast dispatch"},
+    {"api":"android.content.ContentProvider","level":"PARTIAL","since_api":26,"until_api":37,"fallback":"android_art","notes":"Local ContentProvider boot-before-Application and authority query/insert/update/delete routing"},
+    {"api":"android.content.ContentResolver","level":"BEHAVIORAL_DIFF","since_api":26,"until_api":37,"fallback":"android_art","notes":"Sandboxed File/MediaStore + local ContentProvider authority dispatch + persisted URI grants"},
+    {"api":"android.content.Context","level":"BEHAVIORAL_DIFF","since_api":26,"until_api":37,"fallback":"","notes":"Canonical sandbox containment + stateful permission simulation"},
+    {"api":"android.content.pm.PackageManager","level":"PARTIAL","since_api":26,"until_api":37,"fallback":"android_art","notes":"Profile-driven hasSystemFeature + manifest metadata"},
+    {"api":"android.content.res.Resources","level":"PARTIAL","since_api":26,"until_api":37,"fallback":"android_art","notes":"Binary resources.arsc + AXML decoding"},
+    {"api":"android.database.sqlite.SQLiteDatabase","level":"FULLY_IMPLEMENTED","since_api":26,"until_api":37,"fallback":"","notes":"Real SQLite 3.54.1 via sqlite-jdbc with ACID rollback & savepoints"},
+    {"api":"android.graphics.Canvas","level":"BEHAVIORAL_DIFF","since_api":26,"until_api":37,"fallback":"android_art","notes":"Java2D host rasterization"},
+    {"api":"android.media.MediaCodec","level":"REQUIRES_HARDWARE","since_api":26,"until_api":37,"fallback":"physical_device","notes":"Hardware video/audio codec silicon requires physical_device"},
+    {"api":"android.media.MediaMetadataRetriever","level":"PARTIAL","since_api":26,"until_api":37,"fallback":"physical_device","notes":"ISOBMFF/MP4 atom inspection; codecs require hardware/ART"},
+    {"api":"android.net.Uri","level":"BEHAVIORAL_DIFF","since_api":26,"until_api":37,"fallback":"android_art","notes":"Contained sandbox URI resolution"},
+    {"api":"android.os.Looper","level":"FULLY_IMPLEMENTED","since_api":26,"until_api":37,"fallback":"","notes":"Deterministic virtual MessageQueue + SystemClock"},
+    {"api":"android.os.SystemClock","level":"FULLY_IMPLEMENTED","since_api":26,"until_api":37,"fallback":"","notes":"Deterministic virtual uptime/elapsedRealtime"},
+    {"api":"android.provider.DocumentsContract","level":"PARTIAL","since_api":26,"until_api":37,"fallback":"android_art","notes":"DocumentsContract URI document ID helpers for SAF and FileProvider interop"},
+    {"api":"android.provider.MediaStore","level":"PARTIAL","since_api":26,"until_api":37,"fallback":"android_art","notes":"Sandboxed MediaStore metadata & MIME contracts backed by ContentResolver"},
+    {"api":"android.view.View","level":"PARTIAL","since_api":26,"until_api":37,"fallback":"android_art","notes":"Two-pass measure/layout + semantic AST"},
+    {"api":"android.widget.RecyclerView","level":"PARTIAL","since_api":26,"until_api":37,"fallback":"android_art","notes":"Adapter binding & layout integration"},
+    {"api":"androidx.compose.ui.platform.ComposeView","level":"REQUIRES_ART","since_api":26,"until_api":37,"fallback":"robolectric_or_android_art","notes":"Use Robolectric ComposeTestRule or ART device"},
+    {"api":"nanoandroid.host.NanoCoroutineMainBridge","level":"BEHAVIORAL_DIFF","since_api":26,"until_api":37,"fallback":"android_art","notes":"Bridges main-dispatcher runnables deterministically onto Nano main Looper MessageQueue"}
+  ]
+}

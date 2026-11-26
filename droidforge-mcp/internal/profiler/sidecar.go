@@ -73,6 +73,11 @@ func (r *PythonSidecarRunner) AnalyzeTrace(ctx context.Context, tracePath, pkg, 
 	}
 
 	absSidecarDir, _ := filepath.Abs(r.SidecarDir)
+	pythonExe := "python3"
+	if _, pErr := exec.LookPath(pythonExe); pErr != nil {
+		pythonExe = "python"
+	}
+
 	var cmd *exec.Cmd
 	if _, err := exec.LookPath("uv"); err == nil {
 		cmdArgs := append([]string{"run", "--project", absSidecarDir, "df-analyze-trace"}, args...)
@@ -80,7 +85,7 @@ func (r *PythonSidecarRunner) AnalyzeTrace(ctx context.Context, tracePath, pkg, 
 	} else {
 		scriptPath := filepath.Join(absSidecarDir, "df_analyze_trace.py")
 		cmdArgs := append([]string{scriptPath}, args...)
-		cmd = exec.CommandContext(ctx, "python", cmdArgs...)
+		cmd = exec.CommandContext(ctx, pythonExe, cmdArgs...)
 	}
 
 	output, err := cmd.CombinedOutput()
@@ -88,7 +93,7 @@ func (r *PythonSidecarRunner) AnalyzeTrace(ctx context.Context, tracePath, pkg, 
 		// Fallback to python directly
 		scriptPath := filepath.Join(absSidecarDir, "df_analyze_trace.py")
 		cmdArgs := append([]string{scriptPath}, args...)
-		fallbackCmd := exec.CommandContext(ctx, "python", cmdArgs...)
+		fallbackCmd := exec.CommandContext(ctx, pythonExe, cmdArgs...)
 		fallbackOut, fallbackErr := fallbackCmd.CombinedOutput()
 		if fallbackErr != nil {
 			return nil, fmt.Errorf("df-analyze-trace failed: %v (output: %s; fallback: %s)", err, string(output), string(fallbackOut))

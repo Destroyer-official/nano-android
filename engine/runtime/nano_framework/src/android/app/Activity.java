@@ -133,6 +133,100 @@ public class Activity extends ContextThemeWrapper implements Window.Callback, Co
         this.state = State.DESTROYED;
     }
 
+    protected void onNewIntent(Intent intent) {}
+
+    public final void performCreate(Bundle savedInstanceState) {
+        LifecycleEventTracer.record("ACTIVITY_CREATE", getClass().getName(), savedInstanceState != null ? "restored=true" : "restored=false");
+        onCreate(savedInstanceState);
+        this.state = State.CREATED;
+        if (application != null) {
+            application.dispatchActivityCreated(this, savedInstanceState);
+        }
+    }
+
+    public final void performStart() {
+        LifecycleEventTracer.record("ACTIVITY_START", getClass().getName(), "");
+        onStart();
+        this.state = State.STARTED;
+        if (application != null) {
+            application.dispatchActivityStarted(this);
+        }
+    }
+
+    public final void performResume() {
+        LifecycleEventTracer.record("ACTIVITY_RESUME", getClass().getName(), "");
+        onResume();
+        this.state = State.RESUMED;
+        if (application != null) {
+            application.dispatchActivityResumed(this);
+        }
+    }
+
+    public final void performPause() {
+        LifecycleEventTracer.record("ACTIVITY_PAUSE", getClass().getName(), "");
+        onPause();
+        this.state = State.PAUSED;
+        if (application != null) {
+            application.dispatchActivityPaused(this);
+        }
+    }
+
+    public final void performStop() {
+        LifecycleEventTracer.record("ACTIVITY_STOP", getClass().getName(), "");
+        onStop();
+        this.state = State.STOPPED;
+        if (application != null) {
+            application.dispatchActivityStopped(this);
+        }
+    }
+
+    public final void performSaveInstanceState(Bundle outState) {
+        if (outState == null) return;
+        LifecycleEventTracer.record("ACTIVITY_SAVE_INSTANCE_STATE", getClass().getName(), "");
+        onSaveInstanceState(outState);
+        if (application != null) {
+            application.dispatchActivitySaveInstanceState(this, outState);
+        }
+    }
+
+    public final void performRestoreInstanceState(Bundle savedInstanceState) {
+        if (savedInstanceState == null) return;
+        LifecycleEventTracer.record("ACTIVITY_RESTORE_INSTANCE_STATE", getClass().getName(), "");
+        onRestoreInstanceState(savedInstanceState);
+    }
+
+    public final void performDestroy() {
+        LifecycleEventTracer.record("ACTIVITY_DESTROY", getClass().getName(), "");
+        onDestroy();
+        this.state = State.DESTROYED;
+        if (application != null) {
+            application.dispatchActivityDestroyed(this);
+        }
+    }
+
+    public final void performNewIntent(Intent intent) {
+        if (intent != null) setIntent(intent);
+        LifecycleEventTracer.record("ACTIVITY_NEW_INTENT", getClass().getName(), intent != null && intent.getAction() != null ? intent.getAction() : "");
+        onNewIntent(intent);
+    }
+
+    public void recreate() {
+        LifecycleEventTracer.record("ACTIVITY_RECREATE", getClass().getName(), "");
+        if (nanoandroid.host.NanoClassLoader.onRecreateActivityHook != null) {
+            nanoandroid.host.NanoClassLoader.onRecreateActivityHook.accept(this);
+            return;
+        }
+        Bundle stateOut = new Bundle();
+        performPause();
+        performSaveInstanceState(stateOut);
+        performStop();
+        performDestroy();
+        performCreate(stateOut);
+        performStart();
+        performRestoreInstanceState(stateOut);
+        performResume();
+    }
+
     public synchronized void setTheme(int resid) {
         this.themeResId = resid;
     }
@@ -317,8 +411,12 @@ public class Activity extends ContextThemeWrapper implements Window.Callback, Co
     public void onWindowAttributesChanged(android.view.WindowManager.LayoutParams attrs) {}
     public void onContentChanged() {}
 
-    public void registerActivityLifecycleCallbacks(Application.ActivityLifecycleCallbacks callback) {}
-    public void unregisterActivityLifecycleCallbacks(Application.ActivityLifecycleCallbacks callback) {}
+    public void registerActivityLifecycleCallbacks(Application.ActivityLifecycleCallbacks callback) {
+        if (application != null) application.registerActivityLifecycleCallbacks(callback);
+    }
+    public void unregisterActivityLifecycleCallbacks(Application.ActivityLifecycleCallbacks callback) {
+        if (application != null) application.unregisterActivityLifecycleCallbacks(callback);
+    }
 
     private final java.util.List<Fragment> addedFragments = new java.util.ArrayList<>();
     private final java.util.Map<String, Fragment> tagFragments = new java.util.HashMap<>();

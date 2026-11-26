@@ -3,6 +3,7 @@ package policy
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"io"
 	"os"
 	"strings"
@@ -33,9 +34,7 @@ func NewApprovalManager() *ApprovalManager {
 }
 
 func newApprovalHandlerInternal(emulatorOnly bool, in io.Reader) *ApprovalHandler {
-	if in == nil {
-		in = os.Stdin
-	}
+	// Never default `in` to os.Stdin: in stdio MCP mode, os.Stdin is owned by the JSON-RPC loop.
 	return &ApprovalHandler{
 		emulatorOnly: emulatorOnly,
 		in:           in,
@@ -188,6 +187,28 @@ func (h *ApprovalHandler) Execute(ctx context.Context, args map[string]any) (*ty
 		}
 	}
 
+	// Check out-of-band approvals file if configured (avoids reading from MCP stdio)
+	if approvalsFile := strings.TrimSpace(os.Getenv("DROIDFORGE_APPROVALS_FILE")); approvalsFile != "" {
+		if raw, err := os.ReadFile(approvalsFile); err == nil {
+			var fileDecisions map[string]string
+			if json.Unmarshal(raw, &fileDecisions) == nil {
+				if d, ok := fileDecisions[actionID]; ok && d != "" {
+					status := strings.ToUpper(strings.TrimSpace(d))
+					h.decisions[actionID] = status
+					return &types.ToolResult{
+						Success: true,
+						Data: map[string]any{
+							"action_id":  actionID,
+							"status":     status,
+							"approver":   "human:approvals-file",
+							"expires_at": time.Now().UTC().Add(1 * time.Hour).Format(time.RFC3339),
+						},
+					}, nil
+				}
+			}
+		}
+	}
+
 	// Default to PENDING if approval is required and no interactive input arrived
 	return &types.ToolResult{
 		Success: true,
@@ -195,6 +216,7 @@ func (h *ApprovalHandler) Execute(ctx context.Context, args map[string]any) (*ty
 			"action_id":  actionID,
 			"status":     "PENDING",
 			"approver":   "pending_human",
+			"message":    "Human approval required out-of-band; record decision via DROIDFORGE_APPROVALS_FILE or SetDecision before retrying",
 			"expires_at": time.Now().UTC().Add(15 * time.Minute).Format(time.RFC3339),
 		},
 	}, nil

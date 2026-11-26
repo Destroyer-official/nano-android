@@ -12,6 +12,8 @@ import java.util.*;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import javax.imageio.ImageIO;
+import javax.imageio.ImageReader;
+import javax.imageio.stream.ImageInputStream;
 
 /**
  * Pure Java parser for Android APK packages:
@@ -20,7 +22,13 @@ import javax.imageio.ImageIO;
  *   file paths (layouts/drawables), IDs, arrays, and theme styles.
  * - Extracts real PNG/WebP/Bitmap resources and native .so inventory.
  */
-public class ApkResourceTable {
+public class ApkResourceTable implements AutoCloseable {
+
+    public static final int MAX_ZIP_ENTRY_BYTES = 64 * 1024 * 1024;
+    public static final long MAX_TOTAL_ENTRY_BYTES = 512L * 1024 * 1024;
+    public static final int MAX_IMAGE_DIM = 8192;
+    public static final long MAX_IMAGE_PIXELS = 67108864L; // 8192 * 8192
+    private long totalBytesRead = 0L;
 
     public static final int TYPE_NULL = 0x00;
     public static final int TYPE_REFERENCE = 0x01;
@@ -66,7 +74,31 @@ public class ApkResourceTable {
     public int appThemeResId = 0;
     public String launcherActivity = "";
     public int launcherThemeResId = 0;
+    public static class ProviderDecl {
+        public final String className;
+        public final String authorities;
+        public final boolean exported;
+        public ProviderDecl(String className, String authorities, boolean exported) {
+            this.className = className;
+            this.authorities = authorities;
+            this.exported = exported;
+        }
+    }
+
+    public static class ActivityIntentFilter {
+        public final String activityName;
+        public final android.content.IntentFilter filter;
+        public ActivityIntentFilter(String activityName, android.content.IntentFilter filter) {
+            this.activityName = activityName;
+            this.filter = filter;
+        }
+    }
+
     public final List<String> activities = new ArrayList<>();
+    public final List<String> services = new ArrayList<>();
+    public final List<String> receivers = new ArrayList<>();
+    public final List<ProviderDecl> providers = new ArrayList<>();
+    public final List<ActivityIntentFilter> activityIntentFilters = new ArrayList<>();
     public final List<String> permissions = new ArrayList<>();
     public final List<String> nativeLibs = new ArrayList<>();
     public int minSdk = 0;
@@ -107,13 +139,25 @@ public class ApkResourceTable {
 
     public byte[] readZipEntry(String name) {
         if (zipFile == null || name == null) return null;
+        if (name.contains("..") || name.contains("\\") || name.indexOf('\0') >= 0) {
+            throw new SecurityException("Unsafe ZIP entry name blocked: " + name);
+        }
         ZipEntry entry = zipFile.getEntry(name);
         if (entry == null) return null;
+        if (entry.getSize() > MAX_ZIP_ENTRY_BYTES) {
+            throw new SecurityException("ZIP entry exceeds size limit: " + name);
+        }
         try (InputStream is = zipFile.getInputStream(entry)) {
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
             byte[] buf = new byte[8192];
             int n;
+            int entryTotal = 0;
             while ((n = is.read(buf)) != -1) {
+                entryTotal += n;
+                totalBytesRead += n;
+                if (entryTotal > MAX_ZIP_ENTRY_BYTES || totalBytesRead > MAX_TOTAL_ENTRY_BYTES) {
+                    throw new SecurityException("ZIP decompression limit exceeded while reading: " + name);
+                }
                 baos.write(buf, 0, n);
             }
             return baos.toByteArray();
@@ -124,6 +168,9 @@ public class ApkResourceTable {
 
     public BufferedImage loadBitmap(String zipEntryPath) {
         if (zipEntryPath == null || zipFile == null) return null;
+        if (zipEntryPath.contains("..") || zipEntryPath.contains("\\") || zipEntryPath.indexOf('\0') >= 0) {
+            return null;
+        }
         if (imageCache.containsKey(zipEntryPath)) {
             return imageCache.get(zipEntryPath);
         }
@@ -131,18 +178,45 @@ public class ApkResourceTable {
         if (lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg")) {
             try {
                 ZipEntry entry = zipFile.getEntry(zipEntryPath);
-                if (entry != null) {
-                    try (InputStream is = zipFile.getInputStream(entry)) {
-                        BufferedImage img = ImageIO.read(is);
-                        if (img != null) {
-                            imageCache.put(zipEntryPath, img);
-                            return img;
+                if (entry != null && entry.getSize() <= MAX_ZIP_ENTRY_BYTES) {
+                    try (InputStream is = zipFile.getInputStream(entry);
+                         ImageInputStream iis = ImageIO.createImageInputStream(is)) {
+                        if (iis == null) return null;
+                        Iterator<ImageReader> readers = ImageIO.getImageReaders(iis);
+                        if (!readers.hasNext()) return null;
+                        ImageReader reader = readers.next();
+                        try {
+                            reader.setInput(iis, true, true);
+                            int w = reader.getWidth(0);
+                            int h = reader.getHeight(0);
+                            if (w <= 0 || h <= 0 || w > MAX_IMAGE_DIM || h > MAX_IMAGE_DIM || ((long) w * h) > MAX_IMAGE_PIXELS) {
+                                throw new SecurityException("Image dimensions exceed safety limit: " + w + "x" + h);
+                            }
+                            BufferedImage img = reader.read(0);
+                            if (img != null) {
+                                imageCache.put(zipEntryPath, img);
+                                return img;
+                            }
+                        } finally {
+                            reader.dispose();
                         }
                     }
                 }
+            } catch (SecurityException se) {
+                throw se;
             } catch (Throwable ignored) {}
         }
         return null;
+    }
+
+    @Override
+    public void close() {
+        if (zipFile != null) {
+            try {
+                zipFile.close();
+            } catch (IOException ignored) {}
+            zipFile = null;
+        }
     }
 
     private void inspectNativeLibs() {
@@ -560,6 +634,7 @@ public class ApkResourceTable {
         boolean inIntentFilter = false;
         boolean hasMain = false;
         boolean hasLauncher = false;
+        android.content.IntentFilter currentFilter = null;
 
         while (offset + 8 <= axml.length) {
             int chunkType = buf.getShort(offset) & 0xFFFF;
@@ -596,7 +671,7 @@ public class ApkResourceTable {
                     } else if (aType == TYPE_REFERENCE) {
                         resAttrs.put(aName, aData);
                         sVal = getString(aData);
-                    } else if (aType == TYPE_INT_DEC || aType == TYPE_INT_HEX) {
+                    } else if (aType == TYPE_INT_DEC || aType == TYPE_INT_HEX || aType == TYPE_INT_BOOLEAN) {
                         intAttrs.put(aName, aData);
                     }
                     if (!aName.isEmpty() && sVal != null) {
@@ -622,14 +697,35 @@ public class ApkResourceTable {
                     }
                 } else if ("activity-alias".equals(tag)) {
                     currentActivity = resolveComponentName(strAttrs.get("targetActivity"));
+                } else if ("service".equals(tag)) {
+                    String svc = resolveComponentName(strAttrs.get("name"));
+                    if (!svc.isEmpty() && !services.contains(svc)) services.add(svc);
+                } else if ("receiver".equals(tag)) {
+                    String rec = resolveComponentName(strAttrs.get("name"));
+                    if (!rec.isEmpty() && !receivers.contains(rec)) receivers.add(rec);
+                } else if ("provider".equals(tag)) {
+                    String prov = resolveComponentName(strAttrs.get("name"));
+                    String auth = strAttrs.getOrDefault("authorities", "");
+                    boolean exp = intAttrs.getOrDefault("exported", 0) != 0;
+                    if (!prov.isEmpty()) providers.add(new ProviderDecl(prov, auth, exp));
                 } else if ("intent-filter".equals(tag)) {
                     inIntentFilter = true;
                     hasMain = false;
                     hasLauncher = false;
+                    currentFilter = currentActivity != null ? new android.content.IntentFilter() : null;
                 } else if ("action".equals(tag) && inIntentFilter) {
-                    if ("android.intent.action.MAIN".equals(strAttrs.get("name"))) hasMain = true;
+                    String act = strAttrs.get("name");
+                    if ("android.intent.action.MAIN".equals(act)) hasMain = true;
+                    if (currentFilter != null && act != null) currentFilter.addAction(act);
                 } else if ("category".equals(tag) && inIntentFilter) {
-                    if ("android.intent.category.LAUNCHER".equals(strAttrs.get("name"))) hasLauncher = true;
+                    String cat = strAttrs.get("name");
+                    if ("android.intent.category.LAUNCHER".equals(cat)) hasLauncher = true;
+                    if (currentFilter != null && cat != null) currentFilter.addCategory(cat);
+                } else if ("data".equals(tag) && inIntentFilter && currentFilter != null) {
+                    if (strAttrs.containsKey("scheme")) currentFilter.addDataScheme(strAttrs.get("scheme"));
+                    if (strAttrs.containsKey("host")) currentFilter.addDataAuthority(strAttrs.get("host"), strAttrs.get("port"));
+                    if (strAttrs.containsKey("pathPrefix")) currentFilter.addDataPath(strAttrs.get("pathPrefix"), 2);
+                    if (strAttrs.containsKey("path")) currentFilter.addDataPath(strAttrs.get("path"), 0);
                 } else if ("uses-permission".equals(tag)) {
                     if (strAttrs.containsKey("name")) permissions.add(strAttrs.get("name"));
                 }
@@ -641,6 +737,10 @@ public class ApkResourceTable {
                         launcherActivity = currentActivity;
                         launcherThemeResId = currentActTheme;
                     }
+                    if (currentFilter != null && currentActivity != null && !currentActivity.isEmpty()) {
+                        activityIntentFilters.add(new ActivityIntentFilter(currentActivity, currentFilter));
+                    }
+                    currentFilter = null;
                     inIntentFilter = false;
                 } else if ("activity".equals(tag) || "activity-alias".equals(tag)) {
                     currentActivity = null;

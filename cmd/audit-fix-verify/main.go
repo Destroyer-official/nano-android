@@ -30,7 +30,13 @@ func main() {
 	fmt.Println("🚀 VERIFYING ALL AUDIT REPORT BUGS & ARCHITECTURAL FIXES")
 	fmt.Println("================================================================================")
 
-	binaryPath := filepath.Join("bin", "nano-android.exe")
+	binaryPath := filepath.Join("bin", "nano-android-mcp")
+	if os.PathSeparator == '\\' {
+		binaryPath += ".exe"
+	}
+	if _, err := os.Stat(binaryPath); err != nil {
+		binaryPath = filepath.Join("bin", "nano-android.exe")
+	}
 	cmd := exec.Command(binaryPath, "--app", "com.prismv.ui")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -95,9 +101,13 @@ func main() {
 		fmt.Println("✅ [1/5] MCP Protocol Handshake: SUCCESS")
 	}
 
+	targetAPK := os.Getenv("NANO_TEST_APK")
+	if targetAPK == "" {
+		targetAPK = filepath.Join("tools", "prism-v.jar")
+	}
 	// 2. Launch App -> Initial screen: Studio
 	launchRes := callTool(2, "nano_launch_app", map[string]any{
-		"apk_path": "C:\\Users\\des\\OneDrive\\Desktop\\video_compression\\release\\prism-v-v1.2.3.apk",
+		"apk_path": targetAPK,
 	})
 	fmt.Printf("✅ [2/5] Launch App: Status=%v, AppID=%v, SandBox=%v\n",
 		launchRes["status"], launchRes["app_id"], launchRes["sandbox_id"])

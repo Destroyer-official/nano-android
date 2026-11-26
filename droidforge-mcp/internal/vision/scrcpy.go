@@ -134,11 +134,20 @@ func findScrcpyJar() string {
 
 // findFFmpeg locates ffmpeg binary.
 func findFFmpeg() string {
+	if env := strings.TrimSpace(os.Getenv("FFMPEG_PATH")); env != "" {
+		if _, err := os.Stat(env); err == nil {
+			return env
+		}
+	}
 	candidates := []string{
 		"../../bin/ffmpeg.exe",
 		"../bin/ffmpeg.exe",
 		"bin/ffmpeg.exe",
 		"droidforge-mcp/bin/ffmpeg.exe",
+		"../../bin/ffmpeg",
+		"../bin/ffmpeg",
+		"bin/ffmpeg",
+		"droidforge-mcp/bin/ffmpeg",
 		"ffmpeg",
 	}
 	if execPath, err := os.Executable(); err == nil {
@@ -146,6 +155,8 @@ func findFFmpeg() string {
 		candidates = append([]string{
 			filepath.Join(execDir, "bin", "ffmpeg.exe"),
 			filepath.Join(execDir, "ffmpeg.exe"),
+			filepath.Join(execDir, "bin", "ffmpeg"),
+			filepath.Join(execDir, "ffmpeg"),
 		}, candidates...)
 	}
 	for _, c := range candidates {

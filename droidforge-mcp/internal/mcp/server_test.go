@@ -788,3 +788,37 @@ func TestServer_CompilerTools_JSONRPC(t *testing.T) {
 	}
 }
 
+// 13. Unit test: Verify WireProductionEngines registers all 26 canonical tools with real handlers (zero stubs) and cleans up cleanly
+func TestWireProductionEngines_All26RealHandlers(t *testing.T) {
+	cfg := DefaultConfig()
+	pol := DefaultPolicy()
+	srv := NewServer(cfg, pol, nil, nil)
+	WireProductionEngines(srv, cfg, pol, nil, nil)
+	defer func() {
+		if err := srv.Close(); err != nil {
+			t.Errorf("srv.Close() returned error: %v", err)
+		}
+	}()
+
+	if missing := MissingCanonicalTools(srv); len(missing) > 0 {
+		t.Fatalf("missing canonical tools: %v", missing)
+	}
+
+	defs := AllCanonicalToolDefinitions()
+	if len(defs) != 26 {
+		t.Fatalf("expected 26 canonical tool definitions, got %d", len(defs))
+	}
+
+	for _, def := range defs {
+		h, ok := srv.GetHandler(def.Name)
+		if !ok || h == nil {
+			t.Errorf("tool %s not registered", def.Name)
+			continue
+		}
+		if _, isStub := h.(*StubToolHandler); isStub {
+			t.Errorf("tool %s is backed by StubToolHandler instead of production engine", def.Name)
+		}
+	}
+}
+
+

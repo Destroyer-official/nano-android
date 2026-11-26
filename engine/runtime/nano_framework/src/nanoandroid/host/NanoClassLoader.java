@@ -37,11 +37,18 @@ public class NanoClassLoader extends ClassLoader {
     private final Map<String, String[]> classInterfacesMap = new HashMap<>();
     private final Map<String, Integer> classAccessMap = new HashMap<>();
     private final Set<String> classesInstantiatedWithNew = new HashSet<>();
+    private final Map<String, String> kotlinMetadataVersions = new HashMap<>();
+    private final Set<String> desugaredApisDetected = new LinkedHashSet<>();
 
     public static Activity currentActivity;
     public static java.util.function.Consumer<Intent> onStartActivityHook;
     public static java.util.function.BiConsumer<Intent, Integer> onStartActivityForResultHook;
     public static java.util.function.Consumer<Activity> onFinishActivityHook;
+    public static java.util.function.Consumer<Activity> onRecreateActivityHook;
+
+    public static final int MAX_CLASS_COUNT = 50000;
+    public static final int MAX_CLASS_ENTRY_BYTES = 8 * 1024 * 1024;
+    public static final long MAX_TOTAL_BYTECODE_BYTES = 256L * 1024 * 1024;
 
     public NanoClassLoader(File jarFile, File apkFile, ClassLoader parent) throws IOException {
         super(parent);
@@ -51,17 +58,34 @@ public class NanoClassLoader extends ClassLoader {
             this.apkZip = new ZipFile(apkFile);
         }
         if (jarFile != null && jarFile.exists()) {
+            long totalBytecode = 0L;
+            int classCount = 0;
             try (ZipFile zip = new ZipFile(jarFile)) {
                 Enumeration<? extends ZipEntry> entries = zip.entries();
                 while (entries.hasMoreElements()) {
                     ZipEntry entry = entries.nextElement();
-                    if (entry.getName().endsWith(".class")) {
-                        String className = entry.getName().replace('/', '.').substring(0, entry.getName().length() - 6);
+                    String entryName = entry.getName();
+                    if (entryName.contains("..") || entryName.contains("\\") || entryName.indexOf('\0') >= 0) {
+                        throw new SecurityException("Unsafe JAR entry blocked: " + entryName);
+                    }
+                    if (entryName.endsWith(".class")) {
+                        classCount++;
+                        if (classCount > MAX_CLASS_COUNT) {
+                            throw new SecurityException("Class count limit exceeded: " + classCount);
+                        }
+                        String className = entryName.replace('/', '.').substring(0, entryName.length() - 6);
                         try (InputStream is = zip.getInputStream(entry)) {
                             ByteArrayOutputStream baos = new ByteArrayOutputStream();
                             byte[] buf = new byte[8192];
                             int r;
+                            int classBytes = 0;
                             while ((r = is.read(buf)) != -1) {
+                                classBytes += r;
+                                totalBytecode += r;
+                                if (classBytes > MAX_CLASS_ENTRY_BYTES || totalBytecode > MAX_TOTAL_BYTECODE_BYTES) {
+                                    throw new SecurityException(
+                                            "Bytecode decompression limit exceeded loading: " + className);
+                                }
                                 baos.write(buf, 0, r);
                             }
                             rawClasses.put(className, baos.toByteArray());
@@ -106,6 +130,14 @@ public class NanoClassLoader extends ClassLoader {
     public static Object createDummyInterfaceProxy(Class<?> iface) {
         if (iface == null || !iface.isInterface())
             return null;
+        TransformationAuditLog.record(
+                iface.getName(), "*", "DUMMY_INTERFACE_PROXY", null, null,
+                "DEGRADED_HEURISTIC",
+                "Synthesized dynamic Proxy fallback for inlined interface " + iface.getName());
+        nanoandroid.compat.ApiCompatibilityRegistry.recordFault(
+                iface.getName(),
+                "Synthesized dummy interface Proxy fallback (method bodies omitted by R8/dex2jar)",
+                "android_art", false);
         ClassLoader cl = iface.getClassLoader() != null ? iface.getClassLoader()
                 : NanoClassLoader.class.getClassLoader();
         return Proxy.newProxyInstance(cl, new Class<?>[] { iface }, (proxy, method, args) -> {
@@ -165,6 +197,27 @@ public class NanoClassLoader extends ClassLoader {
                     }
 
                     @Override
+                    public AnnotationVisitor visitAnnotation(String descriptor, boolean visible) {
+                        if ("Lkotlin/Metadata;".equals(descriptor)) {
+                            kotlinMetadataVersions.putIfAbsent(cName, "detected");
+                            return new AnnotationVisitor(Opcodes.ASM9) {
+                                @Override
+                                public void visit(String annName, Object value) {
+                                    if ("mv".equals(annName) && value instanceof int[]) {
+                                        int[] mv = (int[]) value;
+                                        if (mv.length >= 2) {
+                                            String ver = mv[0] + "." + mv[1] + (mv.length >= 3 ? "." + mv[2] : "");
+                                            kotlinMetadataVersions.put(cName, ver);
+                                        }
+                                    }
+                                    super.visit(annName, value);
+                                }
+                            };
+                        }
+                        return super.visitAnnotation(descriptor, visible);
+                    }
+
+                    @Override
                     public MethodVisitor visitMethod(int access, String name, String descriptor, String signature,
                             String[] exceptions) {
                         if ("<init>".equals(name)) {
@@ -196,6 +249,16 @@ public class NanoClassLoader extends ClassLoader {
                                     boolean isInterface) {
                                 if (opcode == Opcodes.INVOKESPECIAL && "<init>".equals(mName)) {
                                     classNeededInits.computeIfAbsent(owner, k -> new HashSet<>()).add(descriptor);
+                                }
+                                if (owner != null) {
+                                    if (owner.startsWith("j$/")) {
+                                        desugaredApisDetected.add(owner.replace('/', '.'));
+                                    } else if (owner.startsWith("androidx/compose/")) {
+                                        nanoandroid.compat.ApiCompatibilityRegistry.recordFault(
+                                                "androidx.compose.*",
+                                                "Bytecode references Compose runtime (" + owner.replace('/', '.') + ")",
+                                                "robolectric_or_android_art", true);
+                                    }
                                 }
                                 super.visitMethodInsn(opcode, owner, mName, descriptor, isInterface);
                             }
@@ -325,6 +388,13 @@ public class NanoClassLoader extends ClassLoader {
                                     childView = (View) unsafe.allocateInstance(fType);
                                     childView.setUseSafeLayoutFallback(true);
                                     initViewDefaults(childView, context);
+                                    TransformationAuditLog.record(
+                                            fType.getName(), "<init>", "UNSAFE_ALLOCATE_VIEW", null, null,
+                                            "DEGRADED_HEURISTIC",
+                                            "Synthesized View via Unsafe.allocateInstance without invoking constructor");
+                                    nanoandroid.compat.ApiCompatibilityRegistry.recordFault(
+                                            fType.getName(), "View instantiated via Unsafe.allocateInstance",
+                                            "android_art", false);
                                 }
                             }
                             if (childView != null) {
@@ -347,6 +417,13 @@ public class NanoClassLoader extends ClassLoader {
                                 } catch (Throwable t2) {
                                     Unsafe unsafe = getUnsafe();
                                     d = (android.graphics.drawable.Drawable) unsafe.allocateInstance(fType);
+                                    TransformationAuditLog.record(
+                                            fType.getName(), "<init>", "UNSAFE_ALLOCATE_DRAWABLE", null, null,
+                                            "DEGRADED_HEURISTIC",
+                                            "Synthesized Drawable via Unsafe.allocateInstance");
+                                    nanoandroid.compat.ApiCompatibilityRegistry.recordFault(
+                                            fType.getName(), "Drawable instantiated via Unsafe.allocateInstance",
+                                            "android_art", false);
                                 }
                             }
                             if (d != null) {
@@ -393,6 +470,13 @@ public class NanoClassLoader extends ClassLoader {
 
             Unsafe unsafe = getUnsafe();
             Object binding = unsafe.allocateInstance(bindingClass);
+            TransformationAuditLog.record(
+                    bindingClass.getName(), "<init>", "UNSAFE_VIEW_BINDING", null, null,
+                    "DEGRADED_HEURISTIC",
+                    "Synthesized ViewBinding via Unsafe.allocateInstance");
+            nanoandroid.compat.ApiCompatibilityRegistry.recordFault(
+                    bindingClass.getName(), "ViewBinding synthesized via Unsafe.allocateInstance", "android_art",
+                    false);
             ViewGroup root = null;
 
             for (Field field : bindingClass.getDeclaredFields()) {
@@ -456,6 +540,14 @@ public class NanoClassLoader extends ClassLoader {
         } catch (Throwable t) {
             return null;
         }
+    }
+
+    public Map<String, String> getKotlinMetadataVersions() {
+        return Collections.unmodifiableMap(kotlinMetadataVersions);
+    }
+
+    public Set<String> getDesugaredApisDetected() {
+        return Collections.unmodifiableSet(desugaredApisDetected);
     }
 
     @Override
@@ -1692,6 +1784,10 @@ public class NanoClassLoader extends ClassLoader {
 
             Set<String> declaredInits = new HashSet<>();
             boolean needsJava8Frames = isInterface;
+            Set<String> auditRules = new LinkedHashSet<>();
+            if (strippedAbstract) {
+                auditRules.add("STRIP_ABSTRACT");
+            }
 
             for (MethodNode mn : cn.methods) {
                 if ("<init>".equals(mn.name)) {
@@ -1797,6 +1893,7 @@ public class NanoClassLoader extends ClassLoader {
                                     }
                                 }
                                 if (useInterfaceProxy) {
+                                    auditRules.add("INTERFACE_PROXY_REWRITE");
                                     mn.instructions.set(tin,
                                             new LdcInsnNode(org.objectweb.asm.Type.getObjectType(target)));
                                     mn.instructions.remove(dup);
@@ -1992,6 +2089,7 @@ public class NanoClassLoader extends ClassLoader {
                 }
             }
 
+            byte[] transformed;
             if (!needsJava8Frames) {
                 // Downgrading class version to V1_5 triggers JVM classic type-inference
                 // verifier:
@@ -2000,7 +2098,8 @@ public class NanoClassLoader extends ClassLoader {
                 cn.version = Opcodes.V1_5;
                 ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
                 cn.accept(cw);
-                return cw.toByteArray();
+                transformed = cw.toByteArray();
+                auditRules.add("VERIFIER_DOWNGRADE_V1_5");
             } else {
                 cn.version = Math.max(cn.version, Opcodes.V1_8);
                 ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_FRAMES) {
@@ -2010,9 +2109,29 @@ public class NanoClassLoader extends ClassLoader {
                     }
                 };
                 cn.accept(cw);
-                return cw.toByteArray();
+                transformed = cw.toByteArray();
+                auditRules.add("COMPUTE_FRAMES");
             }
+            if (!Arrays.equals(classBytes, transformed)) {
+                String risk = (auditRules.contains("STRIP_ABSTRACT") || auditRules.contains("INTERFACE_PROXY_REWRITE"))
+                        ? "DEGRADED_HEURISTIC"
+                        : "BEHAVIORAL_DIFF";
+                TransformationAuditLog.record(
+                        name, "*", String.join(",", auditRules),
+                        classBytes, transformed, risk,
+                        "Transformed via ASM 9.11.1");
+                if ("DEGRADED_HEURISTIC".equals(risk)) {
+                    nanoandroid.compat.ApiCompatibilityRegistry.recordFault(
+                            name, "Degraded bytecode rewrite (" + String.join(",", auditRules) + ")",
+                            "android_art", false);
+                }
+            }
+            return transformed;
         } catch (Throwable t) {
+            TransformationAuditLog.record(
+                    name, "*", "TRANSFORM_FAILED_PASSTHROUGH",
+                    classBytes, classBytes, "BEHAVIORAL_DIFF",
+                    t.getClass().getSimpleName() + ": " + t.getMessage());
             return classBytes;
         }
     }

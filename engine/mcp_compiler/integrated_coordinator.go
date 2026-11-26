@@ -67,6 +67,13 @@ type IntegratedCoordinator struct {
 	snapshots      map[string]*ASTNode
 }
 
+// Bridge exposes the underlying LiveHeadlessBridge for deep JVM profiling and timeline inspection.
+func (c *IntegratedCoordinator) Bridge() *LiveHeadlessBridge {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.headlessBridge
+}
+
 // NewIntegratedCoordinator creates a genuine multi-APK coordinator.
 // It checks ADB/AVD hardware availability cleanly without faking devices or screenshots.
 func NewIntegratedCoordinator() *IntegratedCoordinator {
@@ -85,12 +92,18 @@ func NewIntegratedCoordinator() *IntegratedCoordinator {
 
 	c.refreshDeviceProbe()
 
-	// Boot default local reference workspace APK/JAR only if present on disk (e.g. unit tests & studio startup).
+	// Boot default local reference workspace APK/JAR only if configured or present in workspace (e.g. studio startup).
 	// Arbitrary user APKs launched later replace this session cleanly without ever falling back here.
-	defaultCandidates := []string{
-		`C:\Users\des\OneDrive\Desktop\video_compression\release\prism-v-v1.2.3.apk`,
-		resolvePath(filepath.Join("tools", "prism-v.jar"), filepath.Join("..", "..", "tools", "prism-v.jar"), `d:\code\Main_projects\android_mcp\tools\prism-v.jar`),
+	var defaultCandidates []string
+	if envApp := strings.TrimSpace(os.Getenv("NANO_DEFAULT_APP")); envApp != "" {
+		defaultCandidates = append(defaultCandidates, envApp)
 	}
+	defaultCandidates = append(defaultCandidates,
+		resolvePath(
+			filepath.Join("tools", "prism-v.jar"),
+			filepath.Join("..", "..", "tools", "prism-v.jar"),
+		),
+	)
 	for _, cand := range defaultCandidates {
 		if cand == "" {
 			continue
@@ -105,10 +118,38 @@ func NewIntegratedCoordinator() *IntegratedCoordinator {
 	return c
 }
 
+func sdkSubdirBinary(subpath string) string {
+	for _, envVar := range []string{"ANDROID_HOME", "ANDROID_SDK_ROOT"} {
+		if root := strings.TrimSpace(os.Getenv(envVar)); root != "" {
+			p := filepath.Join(root, subpath)
+			if _, err := os.Stat(p); err == nil {
+				return p
+			}
+		}
+	}
+	return ""
+}
+
 func findAdbExecutable() string {
-	candidates := []string{
-		`C:\Android\sdk\platform-tools\adb.exe`,
-		filepath.Join(os.Getenv("LOCALAPPDATA"), `Android\Sdk\platform-tools\adb.exe`),
+	if p, err := exec.LookPath("adb"); err == nil {
+		return p
+	}
+	binName := "adb"
+	if os.PathSeparator == '\\' {
+		binName = "adb.exe"
+	}
+	if p := sdkSubdirBinary(filepath.Join("platform-tools", binName)); p != "" {
+		return p
+	}
+	var candidates []string
+	if local := os.Getenv("LOCALAPPDATA"); local != "" {
+		candidates = append(candidates, filepath.Join(local, "Android", "Sdk", "platform-tools", binName))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates,
+			filepath.Join(home, "Android", "Sdk", "platform-tools", binName),
+			filepath.Join(home, "Library", "Android", "sdk", "platform-tools", binName),
+		)
 	}
 	for _, cand := range candidates {
 		if cand != "" {
@@ -116,17 +157,30 @@ func findAdbExecutable() string {
 				return cand
 			}
 		}
-	}
-	if p, err := exec.LookPath("adb"); err == nil {
-		return p
 	}
 	return ""
 }
 
 func findEmulatorExecutable() string {
-	candidates := []string{
-		`C:\Android\sdk\emulator\emulator.exe`,
-		filepath.Join(os.Getenv("LOCALAPPDATA"), `Android\Sdk\emulator\emulator.exe`),
+	if p, err := exec.LookPath("emulator"); err == nil {
+		return p
+	}
+	binName := "emulator"
+	if os.PathSeparator == '\\' {
+		binName = "emulator.exe"
+	}
+	if p := sdkSubdirBinary(filepath.Join("emulator", binName)); p != "" {
+		return p
+	}
+	var candidates []string
+	if local := os.Getenv("LOCALAPPDATA"); local != "" {
+		candidates = append(candidates, filepath.Join(local, "Android", "Sdk", "emulator", binName))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		candidates = append(candidates,
+			filepath.Join(home, "Android", "Sdk", "emulator", binName),
+			filepath.Join(home, "Library", "Android", "sdk", "emulator", binName),
+		)
 	}
 	for _, cand := range candidates {
 		if cand != "" {
@@ -134,9 +188,6 @@ func findEmulatorExecutable() string {
 				return cand
 			}
 		}
-	}
-	if p, err := exec.LookPath("emulator"); err == nil {
-		return p
 	}
 	return ""
 }

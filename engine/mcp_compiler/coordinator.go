@@ -8,6 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"nano_android/engine/compatibility/registry"
 )
 
 // ASTNode represents a single UI element node in the pruned Android accessibility / Compose tree.
@@ -117,10 +119,16 @@ type LaunchResult struct {
 	TargetSDK        int      `json:"target_sdk,omitempty"`
 	Activities       []string `json:"activities,omitempty"`
 	NativeLibs       int      `json:"native_libs,omitempty"`
-	Warnings         []string `json:"warnings,omitempty"`
-	ExceptionTrace   string   `json:"exception_trace,omitempty"`
-	Error            string   `json:"error,omitempty"`
-	ExecutionMode    string   `json:"execution_mode,omitempty"`
+	Warnings              []string                          `json:"warnings,omitempty"`
+	ExceptionTrace        string                            `json:"exception_trace,omitempty"`
+	Error                 string                            `json:"error,omitempty"`
+	ExecutionMode         string                            `json:"execution_mode,omitempty"`
+	ResultStatus          string                            `json:"result_status,omitempty"`
+	DegradedHeuristic     bool                              `json:"degraded_heuristic,omitempty"`
+	TransformationCount   int                               `json:"transformation_count,omitempty"`
+	CompatFaultCount      int                               `json:"compat_fault_count,omitempty"`
+	KotlinMetadataClasses int                               `json:"kotlin_metadata_classes,omitempty"`
+	Compatibility         *registry.ExecutionRecommendation `json:"compatibility,omitempty"`
 }
 
 // RenderRequest specifies screen capture options.

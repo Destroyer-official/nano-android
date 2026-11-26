@@ -348,7 +348,7 @@ func parseStringPool(chunk []byte) ([]string, error) {
 				if p+1 >= len(chunk) {
 					continue
 				}
-				strLen = int((chunk[p]&0x7f)<<8) | int(chunk[p+1])
+				strLen = (int(chunk[p]&0x7f) << 8) | int(chunk[p+1])
 				p += 2
 			} else {
 				strLen = int(chunk[p])

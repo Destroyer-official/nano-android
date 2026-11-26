@@ -25,7 +25,9 @@ import (
 )
 
 var (
-	version = "0.1.0"
+	version   = "0.1.0"
+	commit    = "dev"
+	buildDate = "unknown"
 )
 
 func main() {
@@ -41,7 +43,7 @@ func run(args []string) error {
 		return nil
 	}
 	if len(args) > 0 && (args[0] == "version" || args[0] == "--version" || args[0] == "-v") {
-		fmt.Printf("droidforge-mcp v%s (MCP protocol: %s)\n", version, mcp.ProtocolVersion)
+		fmt.Printf("droidforge-mcp v%s (commit: %s, built: %s, MCP protocol: %s)\n", version, commit, buildDate, mcp.ProtocolVersion)
 		return nil
 	}
 
@@ -111,10 +113,18 @@ func runServe(args []string) error {
 	if *allowPhysical {
 		guard.SetEmulatorOnly(false)
 	}
-	logger, _ := audit.NewJSONLLogger(pol.Audit.LogDir, pol.Audit.RetentionDays)
+	logger, err := audit.NewJSONLLogger(pol.Audit.LogDir, pol.Audit.RetentionDays)
+	if err != nil {
+		return fmt.Errorf("audit logger initialization failed (%s): %w", pol.Audit.LogDir, err)
+	}
 
 	// 4. Construct MCP server
 	srv := mcp.NewServer(cfg, pol, guard, logger)
+	defer func() {
+		if closeErr := srv.Close(); closeErr != nil {
+			fmt.Fprintf(os.Stderr, "[droidforge-mcp] shutdown cleanup error: %v\n", closeErr)
+		}
+	}()
 
 	// 5. Wire all 26 production engines
 	wiringOpts := mcp.WiringOptions{

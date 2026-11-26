@@ -11,9 +11,10 @@ import (
 	mcp "nano_android/engine/mcp_compiler"
 )
 
-const (
+var (
 	Version   = "1.2.0-prod"
 	BuildDate = "2026-11-24"
+	Commit    = "dev"
 )
 
 func main() {
@@ -27,7 +28,7 @@ func main() {
 	flag.Parse()
 
 	if *versionFlag {
-		fmt.Printf("Nano-Android MCP Server & Maestro Compiler v%s (%s)\n", Version, BuildDate)
+		fmt.Printf("Nano-Android MCP Server & Maestro Compiler v%s (%s, commit: %s)\n", Version, BuildDate, Commit)
 		fmt.Printf("Protocol: MCP %s | JSON-RPC 2.0\n", mcp.MCPProtocolVersion)
 		os.Exit(0)
 	}
@@ -57,6 +58,9 @@ func main() {
 		coord = mcp.NewMockCoordinator()
 	} else {
 		coord = mcp.NewIntegratedCoordinator()
+	}
+	if closer, ok := coord.(interface{ Close() }); ok {
+		defer closer.Close()
 	}
 	compiler := mcp.NewMaestroCompiler(cfg.AppID)
 	reg := mcp.NewToolRegistry(coord, compiler)
